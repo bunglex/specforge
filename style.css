@@ -192,4 +192,9 @@ button.ghost {
   .builder-controls {
     grid-template-columns: 1fr;
   }
+
+  .data-overview-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
