@@ -169,12 +169,14 @@ async function loadSeededData() {
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
 
-    const missingTables = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-      .filter((result) => result.error?.code === '42P01')
+    const tableResults = [workspacesRes, modulesRes, tagsRes, taxonomyRes];
+
+    const missingTables = tableResults
+      .filter((result) => isMissingTableError(result.error))
       .map((result) => result.table);
 
-    const nonMissingTableErrors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-      .filter((result) => result.error && result.error.code !== '42P01')
+    const nonMissingTableErrors = tableResults
+      .filter((result) => result.error && !isMissingTableError(result.error))
       .map((result) => `${result.table}: ${result.error.message}`);
 
     state.dataError = nonMissingTableErrors.join(' · ');
@@ -185,7 +187,11 @@ async function loadSeededData() {
     const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
     if (!state.dataError && totalRows === 0) {
       state.dataHint = 'No rows are visible for this user.';
-      state.dataGuidance = getDataGuidance();
+      state.dataGuidance = getDataGuidance(tableResults);
+    }
+
+    if (state.dataError) {
+      state.dataGuidance = getDataGuidance(tableResults);
     }
 
     setDefaultSelections();
@@ -212,7 +218,7 @@ async function fetchTableData(table) {
   let error;
 
   try {
-    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true }).limit(200);
     ({ data, error } = await preferredQuery);
   } catch (queryError) {
     return {
@@ -225,16 +231,43 @@ async function fetchTableData(table) {
   }
 
   if (error?.code === '42703') {
-    const fallbackQuery = supabase.from(table).select('*');
-    ({ data, error } = await fallbackQuery);
+    try {
+      const fallbackQuery = supabase.from(table).select('*').limit(200);
+      ({ data, error } = await fallbackQuery);
+    } catch (queryError) {
+      return {
+        table,
+        data: [],
+        error: {
+          message: queryError?.message || `Failed to query ${table}.`
+        }
+      };
+    }
   }
 
   return { table, data: data || [], error };
 }
 
-function getDataGuidance() {
-  if (state.dataError || state.dataLoading) {
+function isMissingTableError(error) {
+  return error?.code === '42P01' || error?.code === 'PGRST205' || error?.status === 404;
+}
+
+function getDataGuidance(tableResults = []) {
+  if (state.dataLoading) {
     return '';
+  }
+
+  const blockedTables = tableResults.filter((result) => {
+    const status = result.error?.status;
+    return status === 401 || status === 403 || status === 500;
+  });
+
+  if (blockedTables.length > 0) {
+    const tableList = blockedTables.map((result) => result.table).join(', ');
+    const userEmail = state.session?.user?.email || 'current user';
+    const userId = state.session?.user?.id || '<auth-user-id>';
+
+    return `Access looks blocked for ${tableList}. For ${userEmail}, confirm seeded membership rows exist and match auth.users.id=${userId}, then verify SELECT RLS policies permit this user.`;
   }
 
   const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
