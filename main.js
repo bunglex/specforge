@@ -193,6 +193,18 @@ async function fetchTableData(table) {
   return { table, data: data || [], error };
 }
 
+async function fetchTableData(table) {
+  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+  let { data, error } = await preferredQuery;
+
+  if (error?.code === '42703') {
+    const fallbackQuery = supabase.from(table).select('*');
+    ({ data, error } = await fallbackQuery);
+  }
+
+  return { table, data: data || [], error };
+}
+
 async function handleAuthSubmit(event) {
   event.preventDefault();
 
