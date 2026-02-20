@@ -143,30 +143,38 @@ async function loadSeededData() {
   render();
 
   const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
-    supabase.from('workspaces').select('*').order('name', { ascending: true }),
-    supabase.from('modules').select('*').order('name', { ascending: true }),
-    supabase.from('tags').select('*').order('name', { ascending: true }),
-    supabase.from('taxonomy').select('*').order('name', { ascending: true })
+    fetchTableData('workspaces'),
+    fetchTableData('modules'),
+    fetchTableData('tags'),
+    fetchTableData('taxonomy')
   ]);
 
-  const firstError = workspacesRes.error || modulesRes.error || tagsRes.error || taxonomyRes.error;
+  state.workspaces = workspacesRes.data || [];
+  state.modules = modulesRes.data || [];
+  state.tags = tagsRes.data || [];
+  state.taxonomy = taxonomyRes.data || [];
 
-  if (firstError) {
-    state.dataError = firstError.message;
-    state.workspaces = [];
-    state.modules = [];
-    state.tags = [];
-    state.taxonomy = [];
-  } else {
-    state.workspaces = workspacesRes.data || [];
-    state.modules = modulesRes.data || [];
-    state.tags = tagsRes.data || [];
-    state.taxonomy = taxonomyRes.data || [];
-  }
+  const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+    .filter((result) => result.error)
+    .map((result) => `${result.table}: ${result.error.message}`);
+
+  state.dataError = errors.join(' · ');
 
   setDefaultSelections();
   state.dataLoading = false;
   render();
+}
+
+async function fetchTableData(table) {
+  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+  let { data, error } = await preferredQuery;
+
+  if (error?.code === '42703') {
+    const fallbackQuery = supabase.from(table).select('*');
+    ({ data, error } = await fallbackQuery);
+  }
+
+  return { table, data: data || [], error };
 }
 
 async function handleAuthSubmit(event) {
