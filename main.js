@@ -28,6 +28,7 @@ const supabase = !supabaseConfigError ? createClient(supabaseUrl, supabaseAnonKe
 
 let seededDataLoadVersion = 0;
 const unavailableTables = new Set();
+const TABLE_LOAD_TIMEOUT_MS = 10000;
 
 function mapAuthError(error) {
   if (!error) {
@@ -39,6 +40,20 @@ function mapAuthError(error) {
   }
 
   return error.message;
+}
+
+function withTimeout(promise, timeoutMs, onTimeoutMessage) {
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(onTimeoutMessage));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
 }
 
 const state = {
@@ -154,16 +169,36 @@ async function loadSeededData() {
   render();
 
   try {
-    const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
-      fetchTableData('workspaces'),
-      fetchTableData('modules'),
-      fetchTableData('tags'),
-      fetchTableData('taxonomy')
-    ]);
+    const tableNames = ['workspaces', 'modules', 'tags', 'taxonomy'];
+    const tableSettledResults = await Promise.allSettled(
+      tableNames.map((table) => withTimeout(
+        fetchTableData(table),
+        TABLE_LOAD_TIMEOUT_MS,
+        `Timed out loading ${table} after ${TABLE_LOAD_TIMEOUT_MS}ms.`
+      ))
+    );
 
     if (loadVersion !== seededDataLoadVersion) {
       return;
     }
+
+    const tableResults = tableSettledResults.map((result, index) => {
+      const table = tableNames[index];
+
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+
+      return {
+        table,
+        data: [],
+        error: {
+          message: result.reason?.message || `Failed to query ${table}.`
+        }
+      };
+    });
+
+    const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = tableResults;
 
     state.workspaces = workspacesRes.data || [];
     state.modules = modulesRes.data || [];
@@ -293,6 +328,7 @@ function getDataGuidance(tableResults = []) {
   }
 
   if (state.workspaces.length === 0) {
+    return 'A 404 is usually unrelated to workspace membership. In this app it most often means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify the logged-in user has a workspace membership row allowed by your workspaces SELECT policy.';
     return 'The 404 is typically unrelated to workspace membership. In this app it usually means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify kjones@hotmail.com has a workspace membership row allowed by your workspaces SELECT policy.';
   }
 
