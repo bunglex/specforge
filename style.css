@@ -1,7 +1,7 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: #e2e8f0;
-  background: radial-gradient(circle at top, #1e293b, #0f172a 60%);
+  background: #0f172a;
 }
 
 * {
@@ -11,80 +11,168 @@
 body {
   margin: 0;
   min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 1.5rem;
+  padding: 2rem;
+  background: radial-gradient(circle at top, #1e293b 0%, #0f172a 65%);
 }
 
 .shell {
-  width: min(880px, 100%);
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 16px;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.45);
-  padding: 1.5rem;
+  width: min(1100px, 100%);
+  margin: 0 auto;
   display: grid;
-  gap: 1.25rem;
+  gap: 1rem;
 }
 
-h1,
+header h1,
 h2,
+h3,
+h4,
 p {
   margin: 0;
 }
 
-header p {
-  margin-top: 0.4rem;
-  color: #cbd5e1;
-}
-
-.controls {
-  display: grid;
-  grid-template-columns: 100px 1fr auto;
-  gap: 0.75rem;
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
   align-items: center;
 }
 
-label {
-  color: #cbd5e1;
+.panel {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.8rem;
 }
 
+.auth-panel {
+  max-width: 480px;
+}
+
+input,
 select,
 button,
 textarea {
   font: inherit;
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.95);
   color: #e2e8f0;
-}
-
-select,
-button {
-  padding: 0.6rem 0.8rem;
+  padding: 0.65rem 0.75rem;
 }
 
 button {
   cursor: pointer;
-  background: linear-gradient(120deg, #0ea5e9, #6366f1);
   border: none;
+  background: linear-gradient(120deg, #0ea5e9, #6366f1);
   font-weight: 600;
 }
 
-button:hover {
-  filter: brightness(1.1);
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-textarea {
-  width: 100%;
+button.ghost {
+  background: rgba(30, 41, 59, 1);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.error {
+  color: #fca5a5;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.7rem;
+}
+
+.stats article {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.stats span {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.stats strong {
+  font-size: 1.3rem;
+}
+
+.builder {
+  gap: 1rem;
+}
+
+.builder-controls {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.6rem 0.8rem;
+  align-items: center;
+}
+
+.module-card {
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding-top: 1rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.override-preview {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.html-render {
+  background: rgba(2, 6, 23, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.variable-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.7rem;
+}
+
+.variable-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.variable-field span {
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+
+.variable-field textarea {
+  min-height: 110px;
   resize: vertical;
-  padding: 0.9rem;
-  line-height: 1.35;
 }
 
 @media (max-width: 700px) {
-  .controls {
+  body {
+    padding: 1rem;
+  }
+
+  .builder-controls {
     grid-template-columns: 1fr;
   }
 }
