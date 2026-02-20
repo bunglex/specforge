@@ -205,6 +205,8 @@ async function loadSeededData() {
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
 
+    const tableResults = [workspacesRes, modulesRes, tagsRes, taxonomyRes];
+
     const missingTables = tableResults
       .filter((result) => isMissingTableError(result.error))
       .map((result) => result.table);
@@ -327,6 +329,7 @@ function getDataGuidance(tableResults = []) {
 
   if (state.workspaces.length === 0) {
     return 'A 404 is usually unrelated to workspace membership. In this app it most often means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify the logged-in user has a workspace membership row allowed by your workspaces SELECT policy.';
+    return 'The 404 is typically unrelated to workspace membership. In this app it usually means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify kjones@hotmail.com has a workspace membership row allowed by your workspaces SELECT policy.';
   }
 
   return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
