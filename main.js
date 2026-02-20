@@ -45,6 +45,7 @@ const state = {
   authMode: 'signin',
   authError: '',
   dataError: '',
+  dataHint: '',
   workspaces: [],
   modules: [],
   tags: [],
@@ -140,29 +141,56 @@ async function loadSeededData() {
 
   state.dataLoading = true;
   state.dataError = '';
+  state.dataHint = '';
   render();
 
-  const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
-    fetchTableData('workspaces'),
-    fetchTableData('modules'),
-    fetchTableData('tags'),
-    fetchTableData('taxonomy')
-  ]);
+  try {
+    const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
+      fetchTableData('workspaces'),
+      fetchTableData('modules'),
+      fetchTableData('tags'),
+      fetchTableData('taxonomy')
+    ]);
 
-  state.workspaces = workspacesRes.data || [];
-  state.modules = modulesRes.data || [];
-  state.tags = tagsRes.data || [];
-  state.taxonomy = taxonomyRes.data || [];
+    state.workspaces = workspacesRes.data || [];
+    state.modules = modulesRes.data || [];
+    state.tags = tagsRes.data || [];
+    state.taxonomy = taxonomyRes.data || [];
 
-  const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-    .filter((result) => result.error)
-    .map((result) => `${result.table}: ${result.error.message}`);
+    const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+      .filter((result) => result.error)
+      .map((result) => `${result.table}: ${result.error.message}`);
 
-  state.dataError = errors.join(' · ');
+    state.dataError = errors.join(' · ');
 
-  setDefaultSelections();
-  state.dataLoading = false;
-  render();
+    const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
+    if (!state.dataError && totalRows === 0) {
+      state.dataHint = 'No rows are visible for this user. If your tables use RLS, add SELECT policies (or workspace memberships) for this account.';
+    }
+
+    setDefaultSelections();
+  } catch (error) {
+    state.workspaces = [];
+    state.modules = [];
+    state.tags = [];
+    state.taxonomy = [];
+    state.dataError = mapAuthError(error) || 'Failed to load seeded data.';
+  } finally {
+    state.dataLoading = false;
+    render();
+  }
+}
+
+async function fetchTableData(table) {
+  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+  let { data, error } = await preferredQuery;
+
+  if (error?.code === '42703') {
+    const fallbackQuery = supabase.from(table).select('*');
+    ({ data, error } = await fallbackQuery);
+  }
+
+  return { table, data: data || [], error };
 }
 
 async function fetchTableData(table) {
@@ -310,6 +338,7 @@ function render() {
         <h2>Seeded data</h2>
         ${state.dataLoading ? '<p>Loading from Supabase…</p>' : ''}
         ${state.dataError ? `<p class="error">${escapeHtml(state.dataError)}</p>` : ''}
+        ${state.dataHint ? `<p class="muted">${escapeHtml(state.dataHint)}</p>` : ''}
         <div class="stats">
           <article><span>Workspaces</span><strong>${state.workspaces.length}</strong></article>
           <article><span>Modules</span><strong>${state.modules.length}</strong></article>
@@ -396,6 +425,7 @@ async function init() {
       state.selectedWorkspaceId = '';
       state.selectedModuleId = '';
       state.variableValues = {};
+      state.dataHint = '';
       render();
       return;
     }
