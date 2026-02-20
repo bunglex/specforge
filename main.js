@@ -66,6 +66,7 @@ const state = {
   dataWarning: '',
   dataHint: '',
   dataGuidance: '',
+  tableDiagnostics: [],
   workspaces: [],
   modules: [],
   tags: [],
@@ -200,12 +201,11 @@ async function loadSeededData() {
 
     const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = tableResults;
 
+    state.tableDiagnostics = summarizeTableDiagnostics(tableResults);
     state.workspaces = workspacesRes.data || [];
     state.modules = modulesRes.data || [];
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
-
-    const tableResults = [workspacesRes, modulesRes, tagsRes, taxonomyRes];
 
     const missingTables = tableResults
       .filter((result) => isMissingTableError(result.error))
@@ -241,6 +241,7 @@ async function loadSeededData() {
     state.tags = [];
     state.taxonomy = [];
     state.dataError = mapAuthError(error) || 'Failed to load seeded data.';
+    state.tableDiagnostics = [];
   } finally {
     if (loadVersion === seededDataLoadVersion) {
       state.dataLoading = false;
@@ -304,6 +305,51 @@ function isMissingTableError(error) {
   return error?.code === '42P01' || error?.code === 'PGRST205' || error?.status === 404;
 }
 
+function summarizeTableDiagnostics(tableResults) {
+  return tableResults.map((result) => {
+    const error = result.error;
+    const rowCount = (result.data || []).length;
+
+    if (!error) {
+      return {
+        table: result.table,
+        status: rowCount > 0 ? 'loaded' : 'empty',
+        detail: rowCount > 0 ? `${rowCount} row(s)` : 'No visible rows for this user.'
+      };
+    }
+
+    if (isMissingTableError(error)) {
+      return {
+        table: result.table,
+        status: 'missing',
+        detail: 'Table or endpoint is missing (404/PGRST205/42P01).'
+      };
+    }
+
+    if (error.message?.startsWith('Timed out loading')) {
+      return {
+        table: result.table,
+        status: 'timeout',
+        detail: error.message
+      };
+    }
+
+    if (error.status === 401 || error.status === 403 || error.status === 500) {
+      return {
+        table: result.table,
+        status: 'blocked',
+        detail: error.message || `Status ${error.status}`
+      };
+    }
+
+    return {
+      table: result.table,
+      status: 'error',
+      detail: error.message || 'Unknown error.'
+    };
+  });
+}
+
 function getDataGuidance(tableResults = []) {
   if (state.dataLoading) {
     return '';
@@ -329,7 +375,6 @@ function getDataGuidance(tableResults = []) {
 
   if (state.workspaces.length === 0) {
     return 'A 404 is usually unrelated to workspace membership. In this app it most often means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify the logged-in user has a workspace membership row allowed by your workspaces SELECT policy.';
-    return 'The 404 is typically unrelated to workspace membership. In this app it usually means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify kjones@hotmail.com has a workspace membership row allowed by your workspaces SELECT policy.';
   }
 
   return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
@@ -495,6 +540,16 @@ function render() {
         ${state.dataWarning ? `<p class="muted">${escapeHtml(state.dataWarning)}</p>` : ''}
         ${state.dataHint ? `<p class="muted">${escapeHtml(state.dataHint)}</p>` : ''}
         ${state.dataGuidance ? `<p class="guidance">${escapeHtml(state.dataGuidance)}</p>` : ''}
+        ${state.tableDiagnostics.length ? `
+          <div class="table-diagnostics">
+            <h3>Table status</h3>
+            <ul>
+              ${state.tableDiagnostics
+                .map((item) => `<li><strong>${escapeHtml(item.table)}</strong>: ${escapeHtml(item.status)} — ${escapeHtml(item.detail)}</li>`)
+                .join('')}
+            </ul>
+          </div>
+        ` : ''}
         <div class="stats">
           <article><span>Workspaces</span><strong>${state.workspaces.length}</strong></article>
           <article><span>Modules</span><strong>${state.modules.length}</strong></article>
@@ -584,6 +639,7 @@ async function init() {
       state.dataHint = '';
       state.dataWarning = '';
       state.dataGuidance = '';
+      state.tableDiagnostics = [];
       unavailableTables.clear();
       render();
       return;
