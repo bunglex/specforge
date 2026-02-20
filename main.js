@@ -630,7 +630,7 @@ async function init() {
   const { data } = await supabase.auth.getSession();
   state.session = data.session;
 
-  supabase.auth.onAuthStateChange((_event, session) => {
+  supabase.auth.onAuthStateChange((event, session) => {
     state.session = session;
 
     if (!session) {
@@ -650,7 +650,9 @@ async function init() {
       return;
     }
 
-    loadSeededData();
+    if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+      loadSeededData();
+    }
   });
 
   if (state.session) {
