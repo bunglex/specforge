@@ -27,6 +27,7 @@ const supabaseConfigError = getSupabaseConfigError(supabaseUrl, supabaseAnonKey)
 const supabase = !supabaseConfigError ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 let seededDataLoadVersion = 0;
+const unavailableTables = new Set();
 
 function mapAuthError(error) {
   if (!error) {
@@ -169,12 +170,14 @@ async function loadSeededData() {
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
 
-    const missingTables = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-      .filter((result) => result.error?.code === '42P01')
+    const tableResults = [workspacesRes, modulesRes, tagsRes, taxonomyRes];
+
+    const missingTables = tableResults
+      .filter((result) => isMissingTableError(result.error))
       .map((result) => result.table);
 
-    const nonMissingTableErrors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-      .filter((result) => result.error && result.error.code !== '42P01')
+    const nonMissingTableErrors = tableResults
+      .filter((result) => result.error && !isMissingTableError(result.error))
       .map((result) => `${result.table}: ${result.error.message}`);
 
     state.dataError = nonMissingTableErrors.join(' · ');
@@ -185,7 +188,11 @@ async function loadSeededData() {
     const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
     if (!state.dataError && totalRows === 0) {
       state.dataHint = 'No rows are visible for this user.';
-      state.dataGuidance = getDataGuidance();
+      state.dataGuidance = getDataGuidance(tableResults);
+    }
+
+    if (state.dataError) {
+      state.dataGuidance = getDataGuidance(tableResults);
     }
 
     setDefaultSelections();
@@ -208,11 +215,23 @@ async function loadSeededData() {
 }
 
 async function fetchTableData(table) {
+  if (unavailableTables.has(table)) {
+    return {
+      table,
+      data: [],
+      error: {
+        code: 'PGRST205',
+        status: 404,
+        message: `Skipping ${table} because it was previously reported as missing.`
+      }
+    };
+  }
+
   let data;
   let error;
 
   try {
-    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true }).limit(200);
     ({ data, error } = await preferredQuery);
   } catch (queryError) {
     return {
@@ -225,21 +244,56 @@ async function fetchTableData(table) {
   }
 
   if (error?.code === '42703') {
-    const fallbackQuery = supabase.from(table).select('*');
-    ({ data, error } = await fallbackQuery);
+    try {
+      const fallbackQuery = supabase.from(table).select('*').limit(200);
+      ({ data, error } = await fallbackQuery);
+    } catch (queryError) {
+      return {
+        table,
+        data: [],
+        error: {
+          message: queryError?.message || `Failed to query ${table}.`
+        }
+      };
+    }
+  }
+
+  if (isMissingTableError(error)) {
+    unavailableTables.add(table);
   }
 
   return { table, data: data || [], error };
 }
 
-function getDataGuidance() {
-  if (state.dataError || state.dataLoading) {
+function isMissingTableError(error) {
+  return error?.code === '42P01' || error?.code === 'PGRST205' || error?.status === 404;
+}
+
+function getDataGuidance(tableResults = []) {
+  if (state.dataLoading) {
     return '';
+  }
+
+  const blockedTables = tableResults.filter((result) => {
+    const status = result.error?.status;
+    return status === 401 || status === 403 || status === 500;
+  });
+
+  if (blockedTables.length > 0) {
+    const tableList = blockedTables.map((result) => result.table).join(', ');
+    const userEmail = state.session?.user?.email || 'current user';
+    const userId = state.session?.user?.id || '<auth-user-id>';
+
+    return `Access looks blocked for ${tableList}. For ${userEmail}, confirm seeded membership rows exist and match auth.users.id=${userId}, then verify SELECT RLS policies permit this user.`;
   }
 
   const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
   if (totalRows > 0) {
     return '';
+  }
+
+  if (state.workspaces.length === 0) {
+    return 'The 404 is typically unrelated to workspace membership. In this app it usually means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify kjones@hotmail.com has a workspace membership row allowed by your workspaces SELECT policy.';
   }
 
   return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
@@ -494,6 +548,7 @@ async function init() {
       state.dataHint = '';
       state.dataWarning = '';
       state.dataGuidance = '';
+      unavailableTables.clear();
       render();
       return;
     }
