@@ -155,18 +155,23 @@ function setDefaultSelections() {
   }
 }
 
-async function loadSeededData() {
+async function loadSeededData(forceRefresh = false) {
   if (!supabase || !state.session) {
     return;
   }
 
   const loadVersion = ++seededDataLoadVersion;
 
+  if (forceRefresh) {
+    unavailableTables.clear();
+  }
+
   state.dataLoading = true;
   state.dataError = '';
   state.dataWarning = '';
   state.dataHint = '';
   state.dataGuidance = '';
+  state.tableDiagnostics = [];
   render();
 
   try {
@@ -451,7 +456,7 @@ function wireEvents() {
   document.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
 
   document.querySelector('#reload-seeded-data')?.addEventListener('click', () => {
-    loadSeededData();
+    loadSeededData(true);
   });
 
   document.querySelector('#workspace-select')?.addEventListener('change', (event) => {
