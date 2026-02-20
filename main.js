@@ -3,10 +3,40 @@ import { createClient } from '@supabase/supabase-js';
 
 const app = document.querySelector('#app');
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+function getSupabaseConfigError(url, anonKey) {
+  if (!url || !anonKey) {
+    return 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.';
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    if (!parsedUrl.hostname.endsWith('.supabase.co')) {
+      return 'VITE_SUPABASE_URL must point to your Supabase project domain (https://<project-ref>.supabase.co).';
+    }
+  } catch {
+    return 'VITE_SUPABASE_URL is not a valid URL.';
+  }
+
+  return '';
+}
+
+const supabaseConfigError = getSupabaseConfigError(supabaseUrl, supabaseAnonKey);
+const supabase = !supabaseConfigError ? createClient(supabaseUrl, supabaseAnonKey) : null;
+
+function mapAuthError(error) {
+  if (!error) {
+    return '';
+  }
+
+  if (error.message === 'Failed to fetch') {
+    return `Unable to reach Supabase at ${supabaseUrl}. Double-check VITE_SUPABASE_URL and your network/DNS.`;
+  }
+
+  return error.message;
+}
 
 const state = {
   session: null,
@@ -155,10 +185,15 @@ async function handleAuthSubmit(event) {
   render();
 
   const method = state.authMode === 'signup' ? 'signUp' : 'signInWithPassword';
-  const { error } = await supabase.auth[method]({ email, password });
 
-  if (error) {
-    state.authError = error.message;
+  try {
+    const { error } = await supabase.auth[method]({ email, password });
+
+    if (error) {
+      state.authError = mapAuthError(error);
+    }
+  } catch (error) {
+    state.authError = mapAuthError(error);
   }
 
   state.loading = false;
@@ -213,7 +248,7 @@ function render() {
     app.innerHTML = `
       <main class="shell">
         <h1>SpecForge MVP</h1>
-        <p class="error">Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.</p>
+        <p class="error">${escapeHtml(supabaseConfigError)}</p>
       </main>
     `;
     return;
