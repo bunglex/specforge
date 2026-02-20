@@ -27,6 +27,7 @@ const supabaseConfigError = getSupabaseConfigError(supabaseUrl, supabaseAnonKey)
 const supabase = !supabaseConfigError ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 let seededDataLoadVersion = 0;
+const unavailableTables = new Set();
 
 function mapAuthError(error) {
   if (!error) {
@@ -214,6 +215,18 @@ async function loadSeededData() {
 }
 
 async function fetchTableData(table) {
+  if (unavailableTables.has(table)) {
+    return {
+      table,
+      data: [],
+      error: {
+        code: 'PGRST205',
+        status: 404,
+        message: `Skipping ${table} because it was previously reported as missing.`
+      }
+    };
+  }
+
   let data;
   let error;
 
@@ -245,6 +258,10 @@ async function fetchTableData(table) {
     }
   }
 
+  if (isMissingTableError(error)) {
+    unavailableTables.add(table);
+  }
+
   return { table, data: data || [], error };
 }
 
@@ -273,6 +290,10 @@ function getDataGuidance(tableResults = []) {
   const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
   if (totalRows > 0) {
     return '';
+  }
+
+  if (state.workspaces.length === 0) {
+    return 'The 404 is typically unrelated to workspace membership. In this app it usually means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify kjones@hotmail.com has a workspace membership row allowed by your workspaces SELECT policy.';
   }
 
   return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
@@ -527,6 +548,7 @@ async function init() {
       state.dataHint = '';
       state.dataWarning = '';
       state.dataGuidance = '';
+      unavailableTables.clear();
       render();
       return;
     }
