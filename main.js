@@ -1,98 +1,370 @@
 import './style.css';
+import { createClient } from '@supabase/supabase-js';
 
 const app = document.querySelector('#app');
 
-const templates = {
-  feature: {
-    heading: 'Feature Spec',
-    body: [
-      '## Problem',
-      '- What user pain is this solving?',
-      '',
-      '## Proposal',
-      '- Describe the behavior and UX details.',
-      '',
-      '## Acceptance Criteria',
-      '- [ ] Happy path works for signed-in users.',
-      '- [ ] Validation and error states are handled.',
-      '',
-      '## Rollout',
-      '- Internal dogfood for 1 week, then 10% rollout.'
-    ].join('\n')
-  },
-  bugfix: {
-    heading: 'Bugfix Spec',
-    body: [
-      '## Bug Summary',
-      '- Explain the observed issue and expected behavior.',
-      '',
-      '## Reproduction Steps',
-      '1. Step one',
-      '2. Step two',
-      '',
-      '## Root Cause Hypothesis',
-      '- Why do we think this happens?',
-      '',
-      '## Verification',
-      '- [ ] Regression test added.',
-      '- [ ] Manual test plan documented.'
-    ].join('\n')
-  },
-  api: {
-    heading: 'API Spec',
-    body: [
-      '## Endpoint',
-      '- `POST /v1/example`',
-      '',
-      '## Request Schema',
-      '- Include required fields and validation.',
-      '',
-      '## Response Schema',
-      '- Success and error payloads with status codes.',
-      '',
-      '## Backward Compatibility',
-      '- Define migration strategy and deprecation plan.'
-    ].join('\n')
-  }
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+
+const state = {
+  session: null,
+  loading: false,
+  dataLoading: false,
+  authMode: 'signin',
+  authError: '',
+  dataError: '',
+  workspaces: [],
+  modules: [],
+  tags: [],
+  taxonomy: [],
+  selectedWorkspaceId: '',
+  selectedModuleId: '',
+  variableValues: {}
 };
 
-app.innerHTML = `
-  <main class="shell">
-    <header>
-      <h1>Specforge</h1>
-      <p>Generate clean engineering spec starters in seconds.</p>
-    </header>
-
-    <section class="controls">
-      <label for="template">Template</label>
-      <select id="template" aria-label="Choose a template">
-        <option value="feature">Feature Spec</option>
-        <option value="bugfix">Bugfix Spec</option>
-        <option value="api">API Spec</option>
-      </select>
-      <button id="generate" type="button">Generate Template</button>
-    </section>
-
-    <section>
-      <h2 id="output-heading"></h2>
-      <textarea id="output" rows="16" aria-label="Generated specification template"></textarea>
-    </section>
-  </main>
-`;
-
-const templateSelect = document.querySelector('#template');
-const heading = document.querySelector('#output-heading');
-const output = document.querySelector('#output');
-const generateButton = document.querySelector('#generate');
-
-function renderTemplate(key) {
-  const selected = templates[key] ?? templates.feature;
-  heading.textContent = selected.heading;
-  output.value = selected.body;
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
-generateButton.addEventListener('click', () => {
-  renderTemplate(templateSelect.value);
-});
+function parseVariablesSchema(schema) {
+  if (!schema) {
+    return [];
+  }
 
-renderTemplate('feature');
+  if (typeof schema === 'string') {
+    try {
+      return parseVariablesSchema(JSON.parse(schema));
+    } catch {
+      return [];
+    }
+  }
+
+  if (Array.isArray(schema)) {
+    return schema
+      .map((item, index) => {
+        const key = item?.key || item?.name || `field_${index + 1}`;
+        return {
+          key,
+          label: item?.label || key,
+          type: item?.type || 'text',
+          placeholder: item?.placeholder || '',
+          required: Boolean(item?.required)
+        };
+      })
+      .filter((item) => item.key);
+  }
+
+  if (typeof schema === 'object') {
+    const fields = schema.fields || schema.properties || schema;
+    return Object.entries(fields).map(([key, item]) => ({
+      key,
+      label: item?.label || item?.title || key,
+      type: item?.type === 'number' ? 'number' : item?.type === 'textarea' ? 'textarea' : 'text',
+      placeholder: item?.placeholder || '',
+      required: Boolean(item?.required)
+    }));
+  }
+
+  return [];
+}
+
+function getFilteredModules() {
+  if (!state.selectedWorkspaceId) {
+    return state.modules;
+  }
+
+  return state.modules.filter((module) => {
+    const workspaceField = module.workspace_id ?? module.workspaceId ?? module.workspace;
+    return String(workspaceField ?? '') === String(state.selectedWorkspaceId);
+  });
+}
+
+function getSelectedModule() {
+  const modules = getFilteredModules();
+  return modules.find((module) => String(module.id) === String(state.selectedModuleId)) || null;
+}
+
+function setDefaultSelections() {
+  if (!state.selectedWorkspaceId && state.workspaces[0]?.id) {
+    state.selectedWorkspaceId = String(state.workspaces[0].id);
+  }
+
+  const filteredModules = getFilteredModules();
+  if (!filteredModules.some((module) => String(module.id) === String(state.selectedModuleId))) {
+    state.selectedModuleId = filteredModules[0]?.id ? String(filteredModules[0].id) : '';
+    state.variableValues = {};
+  }
+}
+
+async function loadSeededData() {
+  if (!supabase || !state.session) {
+    return;
+  }
+
+  state.dataLoading = true;
+  state.dataError = '';
+  render();
+
+  const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
+    supabase.from('workspaces').select('*').order('name', { ascending: true }),
+    supabase.from('modules').select('*').order('name', { ascending: true }),
+    supabase.from('tags').select('*').order('name', { ascending: true }),
+    supabase.from('taxonomy').select('*').order('name', { ascending: true })
+  ]);
+
+  const firstError = workspacesRes.error || modulesRes.error || tagsRes.error || taxonomyRes.error;
+
+  if (firstError) {
+    state.dataError = firstError.message;
+    state.workspaces = [];
+    state.modules = [];
+    state.tags = [];
+    state.taxonomy = [];
+  } else {
+    state.workspaces = workspacesRes.data || [];
+    state.modules = modulesRes.data || [];
+    state.tags = tagsRes.data || [];
+    state.taxonomy = taxonomyRes.data || [];
+  }
+
+  setDefaultSelections();
+  state.dataLoading = false;
+  render();
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+
+  if (!supabase) {
+    return;
+  }
+
+  const form = event.currentTarget;
+  const email = form.email.value;
+  const password = form.password.value;
+
+  state.loading = true;
+  state.authError = '';
+  render();
+
+  const method = state.authMode === 'signup' ? 'signUp' : 'signInWithPassword';
+  const { error } = await supabase.auth[method]({ email, password });
+
+  if (error) {
+    state.authError = error.message;
+  }
+
+  state.loading = false;
+  render();
+}
+
+async function handleSignOut() {
+  if (!supabase) {
+    return;
+  }
+
+  state.loading = true;
+  render();
+  await supabase.auth.signOut();
+  state.loading = false;
+  render();
+}
+
+function wireEvents() {
+  document.querySelector('#auth-form')?.addEventListener('submit', handleAuthSubmit);
+
+  document.querySelector('#toggle-auth')?.addEventListener('click', () => {
+    state.authMode = state.authMode === 'signin' ? 'signup' : 'signin';
+    state.authError = '';
+    render();
+  });
+
+  document.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
+
+  document.querySelector('#workspace-select')?.addEventListener('change', (event) => {
+    state.selectedWorkspaceId = event.target.value;
+    setDefaultSelections();
+    render();
+  });
+
+  document.querySelector('#module-select')?.addEventListener('change', (event) => {
+    state.selectedModuleId = event.target.value;
+    state.variableValues = {};
+    render();
+  });
+
+  document.querySelectorAll('[data-variable-key]').forEach((input) => {
+    input.addEventListener('input', (event) => {
+      const key = event.target.dataset.variableKey;
+      state.variableValues[key] = event.target.value;
+    });
+  });
+}
+
+function render() {
+  if (!supabase) {
+    app.innerHTML = `
+      <main class="shell">
+        <h1>SpecForge MVP</h1>
+        <p class="error">Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.</p>
+      </main>
+    `;
+    return;
+  }
+
+  if (!state.session) {
+    const modeLabel = state.authMode === 'signin' ? 'Sign in' : 'Create account';
+    const toggleLabel = state.authMode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in';
+
+    app.innerHTML = `
+      <main class="shell">
+        <header>
+          <h1>SpecForge MVP</h1>
+          <p>Authenticate with Supabase to load seeded workspaces, modules, tags, and taxonomy.</p>
+        </header>
+
+        <form id="auth-form" class="panel auth-panel">
+          <h2>${modeLabel}</h2>
+          <label>Email</label>
+          <input type="email" name="email" required placeholder="you@example.com" />
+          <label>Password</label>
+          <input type="password" name="password" minlength="6" required placeholder="••••••••" />
+          ${state.authError ? `<p class="error">${escapeHtml(state.authError)}</p>` : ''}
+          <div class="row">
+            <button type="submit" ${state.loading ? 'disabled' : ''}>${state.loading ? 'Working…' : modeLabel}</button>
+            <button type="button" id="toggle-auth" class="ghost">${toggleLabel}</button>
+          </div>
+        </form>
+      </main>
+    `;
+
+    wireEvents();
+    return;
+  }
+
+  const filteredModules = getFilteredModules();
+  const selectedModule = getSelectedModule();
+  const variableFields = parseVariablesSchema(selectedModule?.variables_schema);
+
+  app.innerHTML = `
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>SpecForge MVP</h1>
+          <p>Connected to Supabase as ${escapeHtml(state.session.user.email || 'user')}.</p>
+        </div>
+        <button id="sign-out" class="ghost" ${state.loading ? 'disabled' : ''}>Sign out</button>
+      </header>
+
+      <section class="panel data-overview">
+        <h2>Seeded data</h2>
+        ${state.dataLoading ? '<p>Loading from Supabase…</p>' : ''}
+        ${state.dataError ? `<p class="error">${escapeHtml(state.dataError)}</p>` : ''}
+        <div class="stats">
+          <article><span>Workspaces</span><strong>${state.workspaces.length}</strong></article>
+          <article><span>Modules</span><strong>${state.modules.length}</strong></article>
+          <article><span>Tags</span><strong>${state.tags.length}</strong></article>
+          <article><span>Taxonomy</span><strong>${state.taxonomy.length}</strong></article>
+        </div>
+      </section>
+
+      <section class="panel builder">
+        <h2>Builder</h2>
+        <div class="builder-controls">
+          <label for="workspace-select">Workspace</label>
+          <select id="workspace-select">
+            <option value="">All workspaces</option>
+            ${state.workspaces
+              .map((workspace) => `<option value="${escapeHtml(workspace.id)}" ${String(workspace.id) === String(state.selectedWorkspaceId) ? 'selected' : ''}>${escapeHtml(workspace.name || workspace.slug || workspace.id)}</option>`)
+              .join('')}
+          </select>
+
+          <label for="module-select">Module</label>
+          <select id="module-select" ${filteredModules.length === 0 ? 'disabled' : ''}>
+            ${filteredModules
+              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(module.name || module.title || module.id)}</option>`)
+              .join('')}
+          </select>
+        </div>
+
+        ${selectedModule ? `
+          <div class="module-card">
+            <h3>${escapeHtml(selectedModule.name || selectedModule.title || 'Selected module')}</h3>
+            <p class="muted">Module ID: ${escapeHtml(selectedModule.id)}</p>
+            <div class="override-preview">
+              <h4>override_html</h4>
+              <div class="html-render">${selectedModule.override_html || '<em>No override_html provided.</em>'}</div>
+            </div>
+
+            <div>
+              <h4>variables_schema inputs</h4>
+              ${variableFields.length === 0 ? '<p class="muted">No variables_schema fields found.</p>' : ''}
+              <div class="variable-grid">
+                ${variableFields
+                  .map((field) => {
+                    const inputType = field.type === 'number' ? 'number' : 'text';
+                    const value = state.variableValues[field.key] || '';
+                    return `
+                      <label class="variable-field">
+                        <span>${escapeHtml(field.label)}</span>
+                        ${field.type === 'textarea'
+                          ? `<textarea data-variable-key="${escapeHtml(field.key)}" placeholder="${escapeHtml(field.placeholder)}">${escapeHtml(value)}</textarea>`
+                          : `<input type="${inputType}" data-variable-key="${escapeHtml(field.key)}" value="${escapeHtml(value)}" placeholder="${escapeHtml(field.placeholder)}" ${field.required ? 'required' : ''} />`}
+                      </label>
+                    `;
+                  })
+                  .join('')}
+              </div>
+            </div>
+          </div>
+        ` : '<p class="muted">No modules available for this workspace.</p>'}
+      </section>
+    </main>
+  `;
+
+  wireEvents();
+}
+
+async function init() {
+  render();
+
+  if (!supabase) {
+    return;
+  }
+
+  const { data } = await supabase.auth.getSession();
+  state.session = data.session;
+
+  supabase.auth.onAuthStateChange((_event, session) => {
+    state.session = session;
+
+    if (!session) {
+      state.workspaces = [];
+      state.modules = [];
+      state.tags = [];
+      state.taxonomy = [];
+      state.selectedWorkspaceId = '';
+      state.selectedModuleId = '';
+      state.variableValues = {};
+      render();
+      return;
+    }
+
+    loadSeededData();
+  });
+
+  if (state.session) {
+    await loadSeededData();
+  }
+
+  render();
+}
+
+init();
