@@ -47,6 +47,7 @@ const state = {
   authMode: 'signin',
   authError: '',
   dataError: '',
+  dataWarning: '',
   dataHint: '',
   dataGuidance: '',
   workspaces: [],
@@ -146,6 +147,7 @@ async function loadSeededData() {
 
   state.dataLoading = true;
   state.dataError = '';
+  state.dataWarning = '';
   state.dataHint = '';
   state.dataGuidance = '';
   render();
@@ -167,11 +169,18 @@ async function loadSeededData() {
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
 
-    const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
-      .filter((result) => result.error)
+    const missingTables = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+      .filter((result) => result.error?.code === '42P01')
+      .map((result) => result.table);
+
+    const nonMissingTableErrors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+      .filter((result) => result.error && result.error.code !== '42P01')
       .map((result) => `${result.table}: ${result.error.message}`);
 
-    state.dataError = errors.join(' · ');
+    state.dataError = nonMissingTableErrors.join(' · ');
+    state.dataWarning = missingTables.length
+      ? `Optional table(s) not found and skipped: ${missingTables.join(', ')}.`
+      : '';
 
     const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
     if (!state.dataError && totalRows === 0) {
@@ -199,8 +208,21 @@ async function loadSeededData() {
 }
 
 async function fetchTableData(table) {
-  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
-  let { data, error } = await preferredQuery;
+  let data;
+  let error;
+
+  try {
+    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+    ({ data, error } = await preferredQuery);
+  } catch (queryError) {
+    return {
+      table,
+      data: [],
+      error: {
+        message: queryError?.message || `Failed to query ${table}.`
+      }
+    };
+  }
 
   if (error?.code === '42703') {
     const fallbackQuery = supabase.from(table).select('*');
@@ -260,8 +282,24 @@ async function handleSignOut() {
   }
 
   state.loading = true;
+  state.authError = '';
   render();
-  await supabase.auth.signOut();
+
+  try {
+    const signOutPromise = supabase.auth.signOut();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Sign out request timed out.')), 8000);
+    });
+
+    const { error } = await Promise.race([signOutPromise, timeoutPromise]);
+    if (error) {
+      throw error;
+    }
+  } catch (error) {
+    state.authError = `${mapAuthError(error) || 'Sign out failed.'} Clearing local session.`;
+    await supabase.auth.signOut({ scope: 'local' });
+  }
+
   state.loading = false;
   render();
 }
@@ -352,6 +390,7 @@ function render() {
         <div>
           <h1>SpecForge MVP</h1>
           <p>Connected to Supabase as ${escapeHtml(state.session.user.email || 'user')}.</p>
+          ${state.authError ? `<p class="error">${escapeHtml(state.authError)}</p>` : ''}
         </div>
         <button id="sign-out" class="ghost" ${state.loading ? 'disabled' : ''}>Sign out</button>
       </header>
@@ -363,6 +402,7 @@ function render() {
         </div>
         ${state.dataLoading ? '<p>Loading from Supabase…</p>' : ''}
         ${state.dataError ? `<p class="error">${escapeHtml(state.dataError)}</p>` : ''}
+        ${state.dataWarning ? `<p class="muted">${escapeHtml(state.dataWarning)}</p>` : ''}
         ${state.dataHint ? `<p class="muted">${escapeHtml(state.dataHint)}</p>` : ''}
         ${state.dataGuidance ? `<p class="guidance">${escapeHtml(state.dataGuidance)}</p>` : ''}
         <div class="stats">
@@ -452,6 +492,7 @@ async function init() {
       state.selectedModuleId = '';
       state.variableValues = {};
       state.dataHint = '';
+      state.dataWarning = '';
       state.dataGuidance = '';
       render();
       return;
