@@ -171,6 +171,23 @@ async function loadSeededData() {
       state.dataGuidance = getDataGuidance();
     }
 
+
+    state.workspaces = workspacesRes.data || [];
+    state.modules = modulesRes.data || [];
+    state.tags = tagsRes.data || [];
+    state.taxonomy = taxonomyRes.data || [];
+
+    const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+      .filter((result) => result.error)
+      .map((result) => `${result.table}: ${result.error.message}`);
+
+    state.dataError = errors.join(' · ');
+
+    const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
+    if (!state.dataError && totalRows === 0) {
+      state.dataHint = 'No rows are visible for this user. If your tables use RLS, add SELECT policies (or workspace memberships) for this account.';
+    }
+
     setDefaultSelections();
   } catch (error) {
     state.workspaces = [];
@@ -207,6 +224,16 @@ function getDataGuidance() {
   }
 
   return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
+async function fetchTableData(table) {
+  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+  let { data, error } = await preferredQuery;
+
+  if (error?.code === '42703') {
+    const fallbackQuery = supabase.from(table).select('*');
+    ({ data, error } = await fallbackQuery);
+  }
+
+  return { table, data: data || [], error };
 }
 
 async function handleAuthSubmit(event) {
