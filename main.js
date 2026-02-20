@@ -45,6 +45,8 @@ const state = {
   authMode: 'signin',
   authError: '',
   dataError: '',
+  dataHint: '',
+  dataGuidance: '',
   workspaces: [],
   modules: [],
   tags: [],
@@ -140,33 +142,71 @@ async function loadSeededData() {
 
   state.dataLoading = true;
   state.dataError = '';
+  state.dataHint = '';
+  state.dataGuidance = '';
   render();
 
-  const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
-    supabase.from('workspaces').select('*').order('name', { ascending: true }),
-    supabase.from('modules').select('*').order('name', { ascending: true }),
-    supabase.from('tags').select('*').order('name', { ascending: true }),
-    supabase.from('taxonomy').select('*').order('name', { ascending: true })
-  ]);
+  try {
+    const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
+      fetchTableData('workspaces'),
+      fetchTableData('modules'),
+      fetchTableData('tags'),
+      fetchTableData('taxonomy')
+    ]);
 
-  const firstError = workspacesRes.error || modulesRes.error || tagsRes.error || taxonomyRes.error;
-
-  if (firstError) {
-    state.dataError = firstError.message;
-    state.workspaces = [];
-    state.modules = [];
-    state.tags = [];
-    state.taxonomy = [];
-  } else {
     state.workspaces = workspacesRes.data || [];
     state.modules = modulesRes.data || [];
     state.tags = tagsRes.data || [];
     state.taxonomy = taxonomyRes.data || [];
+
+    const errors = [workspacesRes, modulesRes, tagsRes, taxonomyRes]
+      .filter((result) => result.error)
+      .map((result) => `${result.table}: ${result.error.message}`);
+
+    state.dataError = errors.join(' · ');
+
+    const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
+    if (!state.dataError && totalRows === 0) {
+      state.dataHint = 'No rows are visible for this user.';
+      state.dataGuidance = getDataGuidance();
+    }
+
+    setDefaultSelections();
+  } catch (error) {
+    state.workspaces = [];
+    state.modules = [];
+    state.tags = [];
+    state.taxonomy = [];
+    state.dataError = mapAuthError(error) || 'Failed to load seeded data.';
+  } finally {
+    state.dataLoading = false;
+    render();
+  }
+}
+
+async function fetchTableData(table) {
+  const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true });
+  let { data, error } = await preferredQuery;
+
+  if (error?.code === '42703') {
+    const fallbackQuery = supabase.from(table).select('*');
+    ({ data, error } = await fallbackQuery);
   }
 
-  setDefaultSelections();
-  state.dataLoading = false;
-  render();
+  return { table, data: data || [], error };
+}
+
+function getDataGuidance() {
+  if (state.dataError || state.dataLoading) {
+    return '';
+  }
+
+  const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
+  if (totalRows > 0) {
+    return '';
+  }
+
+  return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
 }
 
 async function handleAuthSubmit(event) {
@@ -222,6 +262,10 @@ function wireEvents() {
   });
 
   document.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
+
+  document.querySelector('#reload-seeded-data')?.addEventListener('click', () => {
+    loadSeededData();
+  });
 
   document.querySelector('#workspace-select')?.addEventListener('change', (event) => {
     state.selectedWorkspaceId = event.target.value;
@@ -299,9 +343,14 @@ function render() {
       </header>
 
       <section class="panel data-overview">
-        <h2>Seeded data</h2>
+        <div class="data-overview-header">
+          <h2>Seeded data</h2>
+          <button id="reload-seeded-data" class="ghost" ${state.dataLoading ? 'disabled' : ''}>${state.dataLoading ? 'Loading…' : 'Reload data'}</button>
+        </div>
         ${state.dataLoading ? '<p>Loading from Supabase…</p>' : ''}
         ${state.dataError ? `<p class="error">${escapeHtml(state.dataError)}</p>` : ''}
+        ${state.dataHint ? `<p class="muted">${escapeHtml(state.dataHint)}</p>` : ''}
+        ${state.dataGuidance ? `<p class="guidance">${escapeHtml(state.dataGuidance)}</p>` : ''}
         <div class="stats">
           <article><span>Workspaces</span><strong>${state.workspaces.length}</strong></article>
           <article><span>Modules</span><strong>${state.modules.length}</strong></article>
@@ -388,6 +437,8 @@ async function init() {
       state.selectedWorkspaceId = '';
       state.selectedModuleId = '';
       state.variableValues = {};
+      state.dataHint = '';
+      state.dataGuidance = '';
       render();
       return;
     }
