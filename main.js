@@ -13,11 +13,11 @@ function getSupabaseConfigError(url, anonKey) {
 
   try {
     const parsedUrl = new URL(url);
-    if (!parsedUrl.hostname.endsWith('.supabase.co')) {
-      return 'VITE_SUPABASE_URL must point to your Supabase project domain (https://<project-ref>.supabase.co).';
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return 'VITE_SUPABASE_URL must be a valid HTTP or HTTPS URL.';
     }
   } catch {
-    return 'VITE_SUPABASE_URL is not a valid URL.';
+    return 'VITE_SUPABASE_URL must be a valid HTTP or HTTPS URL.';
   }
 
   return '';
