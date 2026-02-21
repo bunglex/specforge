@@ -133,8 +133,51 @@ function getFilteredModules() {
   }
 
   return state.modules.filter((module) => {
-    const workspaceField = module.workspace_id ?? module.workspaceId ?? module.workspace;
+    const workspaceField = getWorkspaceReference(module);
     return String(workspaceField ?? '') === String(state.selectedWorkspaceId);
+  });
+}
+
+function getWorkspaceReference(module) {
+  return module.workspace_id ?? module.workspaceId ?? module.workspace;
+}
+
+function getDisplayLabel(record) {
+  if (!record || typeof record !== 'object') {
+    return '';
+  }
+
+  const priorityKeys = ['title', 'name', 'label', 'slug', 'id'];
+  const preferredKey = priorityKeys.find((key) => record[key] !== undefined && record[key] !== null && record[key] !== '');
+
+  if (preferredKey) {
+    return String(record[preferredKey]);
+  }
+
+  const firstStringValue = Object.values(record).find((value) => typeof value === 'string' && value.trim());
+  if (firstStringValue) {
+    return firstStringValue;
+  }
+
+  return '';
+}
+
+function sortRowsForDisplay(rows) {
+  return [...rows].sort((left, right) => {
+    const leftLabel = getDisplayLabel(left);
+    const rightLabel = getDisplayLabel(right);
+
+    if (leftLabel && rightLabel) {
+      const labelCompare = leftLabel.localeCompare(rightLabel, undefined, { sensitivity: 'base', numeric: true });
+      if (labelCompare !== 0) {
+        return labelCompare;
+      }
+    }
+
+    return String(left?.id ?? '').localeCompare(String(right?.id ?? ''), undefined, {
+      sensitivity: 'base',
+      numeric: true
+    });
   });
 }
 
@@ -272,7 +315,7 @@ async function fetchTableData(table) {
   let error;
 
   try {
-    const preferredQuery = supabase.from(table).select('*').order('name', { ascending: true }).limit(200);
+    const preferredQuery = supabase.from(table).select('*').limit(200);
     ({ data, error } = await preferredQuery);
   } catch (queryError) {
     return {
@@ -283,27 +326,11 @@ async function fetchTableData(table) {
       }
     };
   }
-
-  if (error?.code === '42703') {
-    try {
-      const fallbackQuery = supabase.from(table).select('*').limit(200);
-      ({ data, error } = await fallbackQuery);
-    } catch (queryError) {
-      return {
-        table,
-        data: [],
-        error: {
-          message: queryError?.message || `Failed to query ${table}.`
-        }
-      };
-    }
-  }
-
   if (isMissingTableError(error)) {
     unavailableTables.add(table);
   }
 
-  return { table, data: data || [], error };
+  return { table, data: sortRowsForDisplay(data || []), error };
 }
 
 function isMissingTableError(error) {
@@ -570,21 +597,21 @@ function render() {
           <select id="workspace-select">
             <option value="">All workspaces</option>
             ${state.workspaces
-              .map((workspace) => `<option value="${escapeHtml(workspace.id)}" ${String(workspace.id) === String(state.selectedWorkspaceId) ? 'selected' : ''}>${escapeHtml(workspace.name || workspace.slug || workspace.id)}</option>`)
+              .map((workspace) => `<option value="${escapeHtml(workspace.id)}" ${String(workspace.id) === String(state.selectedWorkspaceId) ? 'selected' : ''}>${escapeHtml(getDisplayLabel(workspace) || workspace.id)}</option>`)
               .join('')}
           </select>
 
           <label for="module-select">Module</label>
           <select id="module-select" ${filteredModules.length === 0 ? 'disabled' : ''}>
             ${filteredModules
-              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(module.title || module.name || module.id)}</option>`)
+              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(getDisplayLabel(module) || module.id)}</option>`)
               .join('')}
           </select>
         </div>
 
         ${selectedModule ? `
           <div class="module-card">
-            <h3>${escapeHtml(selectedModule.title || selectedModule.name || 'Selected module')}</h3>
+            <h3>${escapeHtml(getDisplayLabel(selectedModule) || 'Selected module')}</h3>
             <p class="muted">Module ID: ${escapeHtml(selectedModule.id)}</p>
             <div class="override-preview">
               <h4>override_html</h4>
