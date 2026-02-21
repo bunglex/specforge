@@ -1,45 +1,63 @@
-# Supabase reset + seed for SpecForge
+# Supabase database bootstrap for SpecForge
 
-This project expects these tables in `public`:
+If your project database is empty, you need **both**:
 
-- `workspaces`
-- `workspace_members`
-- `modules`
-- `tags`
-- `taxonomy` (optional in the app, but included here)
+1. schema creation (tables + policies), and
+2. seed data (demo rows tied to a real auth user).
 
-## 1) Run the schema
+This repo already includes both SQL files:
 
-In your Supabase SQL Editor, run:
+- `supabase/schema.sql` → creates tables/RLS/policies
+- `supabase/seed.sql` → inserts demo data
+
+## 1) Create the tables first (required)
+
+In Supabase Dashboard → **SQL Editor** → **New query**, paste and run the entire contents of:
+
+- `supabase/schema.sql`
+
+> Supabase already provisions the Postgres database for your project. Running `schema.sql` is the step that creates your app tables inside that database.
+
+## 2) Confirm tables exist
+
+Run this in SQL Editor:
 
 ```sql
-\i supabase/schema.sql
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+  and table_name in ('workspaces', 'workspace_members', 'modules', 'tags', 'taxonomy')
+order by table_name;
 ```
 
-If your SQL editor does not support `\i`, paste the file content manually.
+You should see all 5 table names.
 
-## 2) Create a user
+## 3) Create a user for seed ownership
 
-Create a user in **Authentication > Users** (email + password), then copy the user UUID.
+In Supabase Dashboard → **Authentication** → **Users**, create a user (email/password) and copy that user's UUID.
 
-## 3) Seed data for that user
+## 4) Seed demo rows
 
-Open `supabase/seed.sql`, replace `YOUR_AUTH_USER_ID_HERE` with that UUID, then run the SQL.
+Open `supabase/seed.sql`, replace:
 
-## 4) Configure local env
+- `YOUR_AUTH_USER_ID_HERE`
 
-Set these in your `.env` (or `.env.local`):
+with the UUID from step 3, then run `seed.sql` in SQL Editor.
+
+## 5) Configure local env
+
+Set these in `.env` (or `.env.local`):
 
 ```bash
 VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your-anon-key>
 ```
 
-## 5) Verify app
+## 6) Run app and verify
 
 ```bash
 npm install
 npm run dev
 ```
 
-Sign in with the seeded user. You should see non-zero counts for workspaces/modules/tags/taxonomy.
+Sign in with the seeded user. The dashboard should show non-zero data for workspaces/modules/tags/taxonomy.
