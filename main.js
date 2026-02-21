@@ -577,14 +577,14 @@ function render() {
           <label for="module-select">Module</label>
           <select id="module-select" ${filteredModules.length === 0 ? 'disabled' : ''}>
             ${filteredModules
-              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(module.name || module.title || module.id)}</option>`)
+              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(module.title || module.name || module.id)}</option>`)
               .join('')}
           </select>
         </div>
 
         ${selectedModule ? `
           <div class="module-card">
-            <h3>${escapeHtml(selectedModule.name || selectedModule.title || 'Selected module')}</h3>
+            <h3>${escapeHtml(selectedModule.title || selectedModule.name || 'Selected module')}</h3>
             <p class="muted">Module ID: ${escapeHtml(selectedModule.id)}</p>
             <div class="override-preview">
               <h4>override_html</h4>

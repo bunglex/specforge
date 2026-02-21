@@ -20,10 +20,9 @@ on conflict (workspace_id, user_id) do update set role = excluded.role;
 with target_workspace as (
   select id from public.workspaces where slug = 'specforge-demo' limit 1
 )
-insert into public.modules (workspace_id, name, title, override_html, variables_schema)
+insert into public.modules (workspace_id, title, override_html, variables_schema)
 select
   tw.id,
-  v.name,
   v.title,
   v.override_html,
   v.variables_schema::jsonb
@@ -31,7 +30,6 @@ from target_workspace tw
 cross join (
   values
     (
-      'Product Requirements',
       'PRD Generator',
       '<section><h2>PRD Preview</h2><p>Use variables below to shape your requirement doc.</p></section>',
       '[
@@ -41,7 +39,6 @@ cross join (
       ]'
     ),
     (
-      'Technical Design',
       'Tech Spec Generator',
       '<section><h2>Tech Spec Preview</h2><p>Capture architecture and rollout details.</p></section>',
       '[
@@ -49,12 +46,12 @@ cross join (
         {"key":"sla","label":"SLA","type":"text","placeholder":"99.9%"}
       ]'
     )
-) as v(name, title, override_html, variables_schema)
+ ) as v(title, override_html, variables_schema)
 where not exists (
   select 1
   from public.modules m
   where m.workspace_id = tw.id
-    and m.name = v.name
+    and m.title = v.title
 );
 
 with target_workspace as (

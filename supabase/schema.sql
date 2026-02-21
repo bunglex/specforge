@@ -20,10 +20,9 @@ create table if not exists public.workspace_members (
 create table if not exists public.modules (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
-  name text not null,
-  title text,
+  title text not null,
   override_html text,
-  variables_schema jsonb not null default '[]'::jsonb,
+  variables_schema jsonb,
   created_at timestamptz not null default now()
 );
 
