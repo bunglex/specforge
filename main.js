@@ -3,58 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 
 const app = document.querySelector('#app');
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-function getSupabaseConfigError(url, anonKey) {
-  if (!url || !anonKey) {
-    return 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.';
-  }
-
-  try {
-    const parsedUrl = new URL(url);
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-      return 'VITE_SUPABASE_URL must be a valid HTTP or HTTPS URL.';
-    }
-  } catch {
-    return 'VITE_SUPABASE_URL must be a valid HTTP or HTTPS URL.';
-  }
-
-  return '';
-}
-
-const supabaseConfigError = getSupabaseConfigError(supabaseUrl, supabaseAnonKey);
-const supabase = !supabaseConfigError ? createClient(supabaseUrl, supabaseAnonKey) : null;
-
-let seededDataLoadVersion = 0;
-const unavailableTables = new Set();
-const TABLE_LOAD_TIMEOUT_MS = 10000;
-
-function mapAuthError(error) {
-  if (!error) {
-    return '';
-  }
-
-  if (error.message === 'Failed to fetch') {
-    return `Unable to reach Supabase at ${supabaseUrl}. Double-check VITE_SUPABASE_URL and your network/DNS.`;
-  }
-
-  return error.message;
-}
-
-function withTimeout(promise, timeoutMs, onTimeoutMessage) {
-  let timeoutId;
-
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(onTimeoutMessage));
-    }, timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
-}
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 const state = {
   session: null,
@@ -63,10 +15,6 @@ const state = {
   authMode: 'signin',
   authError: '',
   dataError: '',
-  dataWarning: '',
-  dataHint: '',
-  dataGuidance: '',
-  tableDiagnostics: [],
   workspaces: [],
   modules: [],
   tags: [],
@@ -133,51 +81,8 @@ function getFilteredModules() {
   }
 
   return state.modules.filter((module) => {
-    const workspaceField = getWorkspaceReference(module);
+    const workspaceField = module.workspace_id ?? module.workspaceId ?? module.workspace;
     return String(workspaceField ?? '') === String(state.selectedWorkspaceId);
-  });
-}
-
-function getWorkspaceReference(module) {
-  return module.workspace_id ?? module.workspaceId ?? module.workspace;
-}
-
-function getDisplayLabel(record) {
-  if (!record || typeof record !== 'object') {
-    return '';
-  }
-
-  const priorityKeys = ['title', 'name', 'label', 'slug', 'id'];
-  const preferredKey = priorityKeys.find((key) => record[key] !== undefined && record[key] !== null && record[key] !== '');
-
-  if (preferredKey) {
-    return String(record[preferredKey]);
-  }
-
-  const firstStringValue = Object.values(record).find((value) => typeof value === 'string' && value.trim());
-  if (firstStringValue) {
-    return firstStringValue;
-  }
-
-  return '';
-}
-
-function sortRowsForDisplay(rows) {
-  return [...rows].sort((left, right) => {
-    const leftLabel = getDisplayLabel(left);
-    const rightLabel = getDisplayLabel(right);
-
-    if (leftLabel && rightLabel) {
-      const labelCompare = leftLabel.localeCompare(rightLabel, undefined, { sensitivity: 'base', numeric: true });
-      if (labelCompare !== 0) {
-        return labelCompare;
-      }
-    }
-
-    return String(left?.id ?? '').localeCompare(String(right?.id ?? ''), undefined, {
-      sensitivity: 'base',
-      numeric: true
-    });
   });
 }
 
@@ -198,218 +103,40 @@ function setDefaultSelections() {
   }
 }
 
-async function loadSeededData(forceRefresh = false) {
+async function loadSeededData() {
   if (!supabase || !state.session) {
     return;
   }
 
-  const loadVersion = ++seededDataLoadVersion;
-
-  if (forceRefresh) {
-    unavailableTables.clear();
-  }
-
   state.dataLoading = true;
   state.dataError = '';
-  state.dataWarning = '';
-  state.dataHint = '';
-  state.dataGuidance = '';
-  state.tableDiagnostics = [];
   render();
 
-  try {
-    const tableNames = ['workspaces', 'modules', 'tags', 'taxonomy'];
-    const tableSettledResults = await Promise.allSettled(
-      tableNames.map((table) => withTimeout(
-        fetchTableData(table),
-        TABLE_LOAD_TIMEOUT_MS,
-        `Timed out loading ${table} after ${TABLE_LOAD_TIMEOUT_MS}ms.`
-      ))
-    );
+  const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = await Promise.all([
+    supabase.from('workspaces').select('*').order('name', { ascending: true }),
+    supabase.from('modules').select('*').order('name', { ascending: true }),
+    supabase.from('tags').select('*').order('name', { ascending: true }),
+    supabase.from('taxonomy').select('*').order('name', { ascending: true })
+  ]);
 
-    if (loadVersion !== seededDataLoadVersion) {
-      return;
-    }
+  const firstError = workspacesRes.error || modulesRes.error || tagsRes.error || taxonomyRes.error;
 
-    const tableResults = tableSettledResults.map((result, index) => {
-      const table = tableNames[index];
-
-      if (result.status === 'fulfilled') {
-        return result.value;
-      }
-
-      return {
-        table,
-        data: [],
-        error: {
-          message: result.reason?.message || `Failed to query ${table}.`
-        }
-      };
-    });
-
-    const [workspacesRes, modulesRes, tagsRes, taxonomyRes] = tableResults;
-
-    state.tableDiagnostics = summarizeTableDiagnostics(tableResults);
-    state.workspaces = workspacesRes.data || [];
-    state.modules = modulesRes.data || [];
-    state.tags = tagsRes.data || [];
-    state.taxonomy = taxonomyRes.data || [];
-
-    const missingTables = tableResults
-      .filter((result) => isMissingTableError(result.error))
-      .map((result) => result.table);
-
-    const nonMissingTableErrors = tableResults
-      .filter((result) => result.error && !isMissingTableError(result.error))
-      .map((result) => `${result.table}: ${result.error.message}`);
-
-    state.dataError = nonMissingTableErrors.join(' · ');
-    state.dataWarning = missingTables.length
-      ? `Optional table(s) not found and skipped: ${missingTables.join(', ')}.`
-      : '';
-
-    const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
-    if (!state.dataError && totalRows === 0) {
-      state.dataHint = 'No rows are visible for this user.';
-      state.dataGuidance = getDataGuidance(tableResults);
-    }
-
-    if (state.dataError) {
-      state.dataGuidance = getDataGuidance(tableResults);
-    }
-
-    setDefaultSelections();
-  } catch (error) {
-    if (loadVersion !== seededDataLoadVersion) {
-      return;
-    }
-
+  if (firstError) {
+    state.dataError = firstError.message;
     state.workspaces = [];
     state.modules = [];
     state.tags = [];
     state.taxonomy = [];
-    state.dataError = mapAuthError(error) || 'Failed to load seeded data.';
-    state.tableDiagnostics = [];
-  } finally {
-    if (loadVersion === seededDataLoadVersion) {
-      state.dataLoading = false;
-      render();
-    }
-  }
-}
-
-async function fetchTableData(table) {
-  if (unavailableTables.has(table)) {
-    return {
-      table,
-      data: [],
-      error: {
-        code: 'PGRST205',
-        status: 404,
-        message: `Skipping ${table} because it was previously reported as missing.`
-      }
-    };
+  } else {
+    state.workspaces = workspacesRes.data || [];
+    state.modules = modulesRes.data || [];
+    state.tags = tagsRes.data || [];
+    state.taxonomy = taxonomyRes.data || [];
   }
 
-  let data;
-  let error;
-
-  try {
-    const preferredQuery = supabase.from(table).select('*').limit(200);
-    ({ data, error } = await preferredQuery);
-  } catch (queryError) {
-    return {
-      table,
-      data: [],
-      error: {
-        message: queryError?.message || `Failed to query ${table}.`
-      }
-    };
-  }
-  if (isMissingTableError(error)) {
-    unavailableTables.add(table);
-  }
-
-  return { table, data: sortRowsForDisplay(data || []), error };
-}
-
-function isMissingTableError(error) {
-  return error?.code === '42P01' || error?.code === 'PGRST205' || error?.status === 404;
-}
-
-function summarizeTableDiagnostics(tableResults) {
-  return tableResults.map((result) => {
-    const error = result.error;
-    const rowCount = (result.data || []).length;
-
-    if (!error) {
-      return {
-        table: result.table,
-        status: rowCount > 0 ? 'loaded' : 'empty',
-        detail: rowCount > 0 ? `${rowCount} row(s)` : 'No visible rows for this user.'
-      };
-    }
-
-    if (isMissingTableError(error)) {
-      return {
-        table: result.table,
-        status: 'missing',
-        detail: 'Table or endpoint is missing (404/PGRST205/42P01).'
-      };
-    }
-
-    if (error.message?.startsWith('Timed out loading')) {
-      return {
-        table: result.table,
-        status: 'timeout',
-        detail: error.message
-      };
-    }
-
-    if (error.status === 401 || error.status === 403 || error.status === 500) {
-      return {
-        table: result.table,
-        status: 'blocked',
-        detail: error.message || `Status ${error.status}`
-      };
-    }
-
-    return {
-      table: result.table,
-      status: 'error',
-      detail: error.message || 'Unknown error.'
-    };
-  });
-}
-
-function getDataGuidance(tableResults = []) {
-  if (state.dataLoading) {
-    return '';
-  }
-
-  const blockedTables = tableResults.filter((result) => {
-    const status = result.error?.status;
-    return status === 401 || status === 403 || status === 500;
-  });
-
-  if (blockedTables.length > 0) {
-    const tableList = blockedTables.map((result) => result.table).join(', ');
-    const userEmail = state.session?.user?.email || 'current user';
-    const userId = state.session?.user?.id || '<auth-user-id>';
-
-    return `Access looks blocked for ${tableList}. For ${userEmail}, confirm seeded membership rows exist and match auth.users.id=${userId}, then verify SELECT RLS policies permit this user.`;
-  }
-
-  const totalRows = state.workspaces.length + state.modules.length + state.tags.length + state.taxonomy.length;
-  if (totalRows > 0) {
-    return '';
-  }
-
-  if (state.workspaces.length === 0) {
-    return 'A 404 is usually unrelated to workspace membership. In this app it most often means an optional table (often taxonomy) does not exist. If workspaces are still 0, verify the logged-in user has a workspace membership row allowed by your workspaces SELECT policy.';
-  }
-
-  return 'If your project has seeded rows but this user sees none, your RLS policies likely require membership records. Yes: you usually need to assign the user to a workspace (or relax SELECT policies).';
+  setDefaultSelections();
+  state.dataLoading = false;
+  render();
 }
 
 async function handleAuthSubmit(event) {
@@ -428,15 +155,10 @@ async function handleAuthSubmit(event) {
   render();
 
   const method = state.authMode === 'signup' ? 'signUp' : 'signInWithPassword';
+  const { error } = await supabase.auth[method]({ email, password });
 
-  try {
-    const { error } = await supabase.auth[method]({ email, password });
-
-    if (error) {
-      state.authError = mapAuthError(error);
-    }
-  } catch (error) {
-    state.authError = mapAuthError(error);
+  if (error) {
+    state.authError = error.message;
   }
 
   state.loading = false;
@@ -449,24 +171,8 @@ async function handleSignOut() {
   }
 
   state.loading = true;
-  state.authError = '';
   render();
-
-  try {
-    const signOutPromise = supabase.auth.signOut();
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Sign out request timed out.')), 8000);
-    });
-
-    const { error } = await Promise.race([signOutPromise, timeoutPromise]);
-    if (error) {
-      throw error;
-    }
-  } catch (error) {
-    state.authError = `${mapAuthError(error) || 'Sign out failed.'} Clearing local session.`;
-    await supabase.auth.signOut({ scope: 'local' });
-  }
-
+  await supabase.auth.signOut();
   state.loading = false;
   render();
 }
@@ -481,10 +187,6 @@ function wireEvents() {
   });
 
   document.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
-
-  document.querySelector('#reload-seeded-data')?.addEventListener('click', () => {
-    loadSeededData(true);
-  });
 
   document.querySelector('#workspace-select')?.addEventListener('change', (event) => {
     state.selectedWorkspaceId = event.target.value;
@@ -511,7 +213,7 @@ function render() {
     app.innerHTML = `
       <main class="shell">
         <h1>SpecForge MVP</h1>
-        <p class="error">${escapeHtml(supabaseConfigError)}</p>
+        <p class="error">Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.</p>
       </main>
     `;
     return;
@@ -557,31 +259,14 @@ function render() {
         <div>
           <h1>SpecForge MVP</h1>
           <p>Connected to Supabase as ${escapeHtml(state.session.user.email || 'user')}.</p>
-          ${state.authError ? `<p class="error">${escapeHtml(state.authError)}</p>` : ''}
         </div>
         <button id="sign-out" class="ghost" ${state.loading ? 'disabled' : ''}>Sign out</button>
       </header>
 
       <section class="panel data-overview">
-        <div class="data-overview-header">
-          <h2>Seeded data</h2>
-          <button id="reload-seeded-data" class="ghost" ${state.dataLoading ? 'disabled' : ''}>${state.dataLoading ? 'Loading…' : 'Reload data'}</button>
-        </div>
+        <h2>Seeded data</h2>
         ${state.dataLoading ? '<p>Loading from Supabase…</p>' : ''}
         ${state.dataError ? `<p class="error">${escapeHtml(state.dataError)}</p>` : ''}
-        ${state.dataWarning ? `<p class="muted">${escapeHtml(state.dataWarning)}</p>` : ''}
-        ${state.dataHint ? `<p class="muted">${escapeHtml(state.dataHint)}</p>` : ''}
-        ${state.dataGuidance ? `<p class="guidance">${escapeHtml(state.dataGuidance)}</p>` : ''}
-        ${state.tableDiagnostics.length ? `
-          <div class="table-diagnostics">
-            <h3>Table status</h3>
-            <ul>
-              ${state.tableDiagnostics
-                .map((item) => `<li><strong>${escapeHtml(item.table)}</strong>: ${escapeHtml(item.status)} — ${escapeHtml(item.detail)}</li>`)
-                .join('')}
-            </ul>
-          </div>
-        ` : ''}
         <div class="stats">
           <article><span>Workspaces</span><strong>${state.workspaces.length}</strong></article>
           <article><span>Modules</span><strong>${state.modules.length}</strong></article>
@@ -597,21 +282,21 @@ function render() {
           <select id="workspace-select">
             <option value="">All workspaces</option>
             ${state.workspaces
-              .map((workspace) => `<option value="${escapeHtml(workspace.id)}" ${String(workspace.id) === String(state.selectedWorkspaceId) ? 'selected' : ''}>${escapeHtml(getDisplayLabel(workspace) || workspace.id)}</option>`)
+              .map((workspace) => `<option value="${escapeHtml(workspace.id)}" ${String(workspace.id) === String(state.selectedWorkspaceId) ? 'selected' : ''}>${escapeHtml(workspace.name || workspace.slug || workspace.id)}</option>`)
               .join('')}
           </select>
 
           <label for="module-select">Module</label>
           <select id="module-select" ${filteredModules.length === 0 ? 'disabled' : ''}>
             ${filteredModules
-              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(getDisplayLabel(module) || module.id)}</option>`)
+              .map((module) => `<option value="${escapeHtml(module.id)}" ${String(module.id) === String(state.selectedModuleId) ? 'selected' : ''}>${escapeHtml(module.title || module.title || module.id)}</option>`)
               .join('')}
           </select>
         </div>
 
         ${selectedModule ? `
           <div class="module-card">
-            <h3>${escapeHtml(getDisplayLabel(selectedModule) || 'Selected module')}</h3>
+            <h3>${escapeHtml(selectedModule.title || selectedModule.title || 'Selected module')}</h3>
             <p class="muted">Module ID: ${escapeHtml(selectedModule.id)}</p>
             <div class="override-preview">
               <h4>override_html</h4>
@@ -657,7 +342,7 @@ async function init() {
   const { data } = await supabase.auth.getSession();
   state.session = data.session;
 
-  supabase.auth.onAuthStateChange((event, session) => {
+  supabase.auth.onAuthStateChange((_event, session) => {
     state.session = session;
 
     if (!session) {
@@ -668,18 +353,11 @@ async function init() {
       state.selectedWorkspaceId = '';
       state.selectedModuleId = '';
       state.variableValues = {};
-      state.dataHint = '';
-      state.dataWarning = '';
-      state.dataGuidance = '';
-      state.tableDiagnostics = [];
-      unavailableTables.clear();
       render();
       return;
     }
 
-    if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
-      loadSeededData();
-    }
+    loadSeededData();
   });
 
   if (state.session) {
