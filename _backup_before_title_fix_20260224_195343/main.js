@@ -296,7 +296,7 @@ function render() {
 
         ${selectedModule ? `
           <div class="module-card">
-            <h3>${escapeHtml(selectedModule.title || selectedModule.title || 'Selected module')}</h3>
+            <h3>${escapeHtml(selectedmodule.title || selectedModule.title || 'Selected module')}</h3>
             <p class="muted">Module ID: ${escapeHtml(selectedModule.id)}</p>
             <div class="override-preview">
               <h4>override_html</h4>
