@@ -1,3 +1,35 @@
 node_modules/
 dist/
 .DS_Store
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# Supabase local (if you use it)
+.supabase/
+
+# node / build
+node_modules/
+dist/
+.vite/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# local backups / scratch
+*_backup_*
+*.bak
+*.tmp
+# --- secrets ---
+*.pem
+*.key
+# --- node / build ---
+# --- logs / misc ---
+*.log
+# --- local backups ---
+*backup*
