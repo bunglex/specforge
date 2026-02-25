@@ -23,7 +23,6 @@ export default function Inspector({
 
   return (
     <aside className={`panel inspector-panel ${className || ''}`.trim()}>
-      <div className="window-titlebar">Edit panel</div>
       <h2>Inspector</h2>
       {!selectedBlock ? <p className="muted">Select a block to edit.</p> : null}
       {selectedBlock ? (
