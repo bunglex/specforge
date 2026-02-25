@@ -9,12 +9,12 @@
 body {
   margin: 0;
   min-height: 100vh;
-  padding: 1rem;
+  padding: 0;
   background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
   color: #111827;
 }
 
-.shell { width: min(1400px, 100%); margin: 0 auto; display: grid; gap: 0.7rem; }
+.shell { width: 100%; height: 100vh; margin: 0 auto; display: grid; gap: 0.7rem; padding: 0.8rem; }
 h1,h2,h3,p { margin: 0; }
 .topbar { display:flex; justify-content:space-between; align-items:center; gap:0.75rem; }
 .panel {
@@ -117,6 +117,10 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
 .left-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
 .left-tabs button.active { outline: 2px solid #8b5cf6; }
 .window-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
   padding: 0.35rem 0.45rem;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -241,7 +245,8 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
 
 .windows-desktop {
   position: relative;
-  min-height: 78vh;
+  min-height: 0;
+  height: 100%;
   border: 1px solid #94a3b8;
   border-radius: 14px;
   background: linear-gradient(180deg, #dbeafe 0%, #bfdbfe 100%);
@@ -255,9 +260,9 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.26);
   border-color: #94a3b8;
 }
-.app-window-library { width: 300px; height: 70vh; }
-.app-window-browser { width: min(620px, calc(100% - 680px)); min-width: 380px; height: 70vh; }
-.app-window-properties { width: 320px; height: 70vh; }
+.app-window-library { width: 300px; height: calc(100% - 24px); }
+.app-window-browser { width: min(620px, calc(100% - 680px)); min-width: 380px; height: calc(100% - 24px); }
+.app-window-properties { width: 320px; height: calc(100% - 24px); }
 .window-titlebar.draggable {
   cursor: move;
   user-select: none;
