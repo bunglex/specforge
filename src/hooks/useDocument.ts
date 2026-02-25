@@ -39,7 +39,7 @@ export function useDocument(documentId?: string) {
     setSaveState('Saving…');
     timerRef.current = window.setTimeout(() => {
       void saveNow();
-    }, 700);
+    }, 900);
   }, [saveNow]);
 
   useEffect(() => {

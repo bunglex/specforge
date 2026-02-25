@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppShell from '../components/AppShell';
 import { supabase } from '../supabaseClient';
 
 export default function AuthPage() {
@@ -7,8 +8,9 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
 
   return (
-    <main className="shell">
-      <header><h1>Spec Writer</h1><p>Sign in to manage reusable clauses and structured documents.</p></header>
+    <AppShell
+      header={<header><h1>Spec Writer</h1><p>Sign in to manage reusable clauses and structured documents.</p></header>}
+    >
       <form
         className="panel auth-panel"
         onSubmit={async (event) => {
@@ -29,7 +31,7 @@ export default function AuthPage() {
         <h2>{authMode === 'signin' ? 'Sign in' : 'Create account'}</h2>
         <label>Email</label><input name="email" type="email" required />
         <label>Password</label><input name="password" type="password" minLength={6} required />
-        {authError && <p className="error">{authError}</p>}
+        {authError ? <p className="error">{authError}</p> : null}
         <div className="row">
           <button type="submit" disabled={loading}>{loading ? 'Working…' : authMode === 'signin' ? 'Sign in' : 'Create account'}</button>
           <button type="button" className="ghost" onClick={() => setAuthMode((m) => (m === 'signin' ? 'signup' : 'signin'))}>
@@ -37,6 +39,6 @@ export default function AuthPage() {
           </button>
         </div>
       </form>
-    </main>
+    </AppShell>
   );
 }

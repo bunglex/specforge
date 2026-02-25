@@ -5,6 +5,7 @@ import AuthPage from './pages/AuthPage';
 import { hasSupabaseConfig } from './supabaseClient';
 import { useSession } from './hooks/useSession';
 import { useWorkspaceContext } from './hooks/useWorkspaceContext';
+import AppShell from './components/AppShell';
 
 function RequireAuth({ session, children }: { session: any; children: JSX.Element }) {
   if (!session) {
@@ -18,19 +19,18 @@ export default function App() {
   const { context, loading: contextLoading, error: contextError, refresh } = useWorkspaceContext(session);
 
   if (!hasSupabaseConfig()) {
-    return <main className="shell"><section className="panel error-panel"><h1>Spec Writer</h1><p>Missing Supabase configuration in environment variables.</p></section></main>;
+    return <AppShell><section className="panel error-panel"><h1>Spec Writer</h1><p>Missing Supabase configuration in environment variables.</p></section></AppShell>;
   }
 
   if (loading) {
-    return <main className="shell"><section className="panel"><p>Loading session…</p></section></main>;
+    return <AppShell><section className="panel"><p>Loading session…</p></section></AppShell>;
   }
 
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
-        path="/dashboard"
-        element={
+        path="/"
+        element={(
           <RequireAuth session={session}>
             <DashboardPage
               session={session}
@@ -40,17 +40,18 @@ export default function App() {
               onContextRefresh={refresh}
             />
           </RequireAuth>
-        }
+        )}
       />
       <Route
-        path="/editor/:id"
-        element={
+        path="/editor/:documentId"
+        element={(
           <RequireAuth session={session}>
             <EditorPage clauses={context.clauses || []} />
           </RequireAuth>
-        }
+        )}
       />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/dashboard" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
