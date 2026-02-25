@@ -42,80 +42,82 @@ export default function DashboardPage({ session, context, contextError, contextL
         </header>
       )}
     >
-      <section className="panel dashboard-panel">
-        <div className="panel-heading">
-          <h2>Workspace & project</h2>
-          <p className="muted">Choose where you want to work and filter by project.</p>
-        </div>
-        {contextError ? <p className="error">{contextError}</p> : null}
-        <div className="dashboard-grid dashboard-grid-2">
-          <label className="field-block">
-            <span>Workspace</span>
-            <select value={activeWorkspaceId} onChange={(e) => setSelectedWorkspaceId(e.target.value)}>
-              {context.workspaces.length === 0 ? <option value="">No workspaces available</option> : null}
-              {context.workspaces.map((workspace: any) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
-            </select>
-          </label>
-          <label className="field-block">
-            <span>Project</span>
-            <select value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
-              <option value="all">All projects</option>
-              {projects.map((project: string) => <option key={project} value={project}>{project}</option>)}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section className="panel dashboard-panel">
-        <div className="panel-heading">
-          <h2>Create document</h2>
-          <p className="muted">Start a new spec in the currently selected workspace.</p>
-        </div>
-        {createError ? <p className="error">{createError}</p> : null}
-        <form className="dashboard-grid dashboard-grid-2" onSubmit={async (e) => {
-          e.preventDefault();
-          setCreateError('');
-          const form = new FormData(e.currentTarget);
-          const projectName = String(form.get('projectName') || '');
-          const title = String(form.get('title') || '');
-          try {
-            await createDocument({ workspaceId: activeWorkspaceId, projectName, title });
-            await onContextRefresh();
-            e.currentTarget.reset();
-          } catch (error: any) {
-            setCreateError(error.message || 'Failed to create document.');
-          }
-        }}>
-          <label className="field-block">
-            <span>Project</span>
-            <input name="projectName" required placeholder="e.g. Riverside Apartments" />
-          </label>
-          <label className="field-block">
-            <span>Document title</span>
-            <input name="title" required placeholder="e.g. Architectural performance specification" />
-          </label>
-          <div className="dashboard-actions">
-            <button type="submit" disabled={!activeWorkspaceId}>Create document</button>
+      <div className="dashboard-layout">
+        <section className="panel dashboard-panel workspace-panel">
+          <div className="panel-heading">
+            <h2>Workspace & project</h2>
+            <p className="muted">Choose where you want to work and filter by project.</p>
           </div>
-        </form>
-      </section>
+          {contextError ? <p className="error">{contextError}</p> : null}
+          <div className="dashboard-grid dashboard-grid-2">
+            <label className="field-block">
+              <span>Workspace</span>
+              <select value={activeWorkspaceId} onChange={(e) => setSelectedWorkspaceId(e.target.value)}>
+                {context.workspaces.length === 0 ? <option value="">No workspaces available</option> : null}
+                {context.workspaces.map((workspace: any) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+              </select>
+            </label>
+            <label className="field-block">
+              <span>Project</span>
+              <select value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)}>
+                <option value="all">All projects</option>
+                {projects.map((project: string) => <option key={project} value={project}>{project}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
 
-      <section className="panel dashboard-panel">
-        <h2>Documents</h2>
-        {contextLoading ? <p>Loading data…</p> : null}
-        {filteredDocuments.length === 0 ? <p className="muted">No documents found for this selection.</p> : null}
-        <div className="doc-list">
-          {filteredDocuments.map((doc: any) => (
-            <article key={doc.id} className="doc-list-item">
-              <div>
-                <strong>{doc.title}</strong>
-                <p className="muted">{doc.project_name || 'No project'}</p>
-              </div>
-              <Link to={`/editor/${doc.id}`} className="doc-link"><button>Open editor</button></Link>
-            </article>
-          ))}
+        <section className="panel dashboard-panel">
+          <div className="panel-heading">
+            <h2>Create document</h2>
+            <p className="muted">Start a new spec in the currently selected workspace.</p>
+          </div>
+          {createError ? <p className="error">{createError}</p> : null}
+          <form className="dashboard-grid dashboard-grid-2" onSubmit={async (e) => {
+            e.preventDefault();
+            setCreateError('');
+            const form = new FormData(e.currentTarget);
+            const projectName = String(form.get('projectName') || '');
+            const title = String(form.get('title') || '');
+            try {
+              await createDocument({ workspaceId: activeWorkspaceId, projectName, title });
+              await onContextRefresh();
+              e.currentTarget.reset();
+            } catch (error: any) {
+              setCreateError(error.message || 'Failed to create document.');
+            }
+          }}>
+            <label className="field-block">
+              <span>Project</span>
+              <input name="projectName" required placeholder="e.g. Riverside Apartments" />
+            </label>
+            <label className="field-block">
+              <span>Document title</span>
+              <input name="title" required placeholder="e.g. Architectural performance specification" />
+            </label>
+            <div className="dashboard-actions">
+              <button type="submit" disabled={!activeWorkspaceId}>Create document</button>
+            </div>
+          </form>
+        </section>
+
+        <section className="panel dashboard-panel dashboard-documents">
+          <h2>Documents</h2>
+          {contextLoading ? <p>Loading data…</p> : null}
+          {filteredDocuments.length === 0 ? <p className="muted">No documents found for this selection.</p> : null}
+          <div className="doc-list">
+            {filteredDocuments.map((doc: any) => (
+              <article key={doc.id} className="doc-list-item">
+                <div>
+                  <strong>{doc.title}</strong>
+                  <p className="muted">{doc.project_name || 'No project'}</p>
+                </div>
+                <Link to={`/editor/${doc.id}`} className="doc-link"><button>Open editor</button></Link>
+              </article>
+            ))}
+          </div>
+        </section>
         </div>
-      </section>
     </AppShell>
   );
 }
