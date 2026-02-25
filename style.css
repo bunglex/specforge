@@ -320,6 +320,8 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
   border-radius: 10px;
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.26);
   border-color: #94a3b8;
+  grid-auto-rows: min-content;
+  align-content: start;
 }
 .app-window-library { width: 300px; height: calc(100% - 24px); }
 .app-window-browser { width: min(620px, calc(100% - 680px)); min-width: 380px; height: calc(100% - 24px); }
