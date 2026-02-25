@@ -64,6 +64,11 @@ The editor route is now a 3-pane interface:
 - **Middle (Preview):** scrollable rendered section/block preview with anchors.
 - **Right (Inspector):** block editor (text/clause settings + variable values).
 
+Inspector and insertion notes:
+- `text` blocks support direct textarea editing with live preview updates.
+- `clause_ref` blocks support detail level changes (`outline|standard|detailed`) and optional body overrides.
+- Use **Insert Clause** in Preview or Inspector to open the clause picker with title/body search + taxonomy/tag filters.
+
 Shortcuts:
 - `Esc`: close the inspector (clear selected block).
 - `Ctrl+S` / `Cmd+S`: force immediate save.
