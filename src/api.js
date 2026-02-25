@@ -36,8 +36,8 @@ export async function createDocument({ workspaceId, projectName, title }) {
 
   const emptyStructure = {
     sections: [
-      { id: crypto.randomUUID(), title: 'Introduction', content: '' },
-      { id: crypto.randomUUID(), title: 'Scope', content: '' }
+      { id: crypto.randomUUID(), title: 'Introduction', blocks: [{ id: crypto.randomUUID(), type: 'text', body: '' }] },
+      { id: crypto.randomUUID(), title: 'Scope', blocks: [{ id: crypto.randomUUID(), type: 'text', body: '' }] }
     ]
   };
 
