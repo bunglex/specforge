@@ -514,7 +514,25 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     bringToFront(key);
     const windowState = desktopWindows[key];
     if (windowState.maximized || resizeState) return;
-    setDragState({ key, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: windowState.x, originY: windowState.y });
+
+    let originX = windowState.x;
+    let originY = windowState.y;
+    const desktopBounds = desktopRef.current?.getBoundingClientRect();
+    const windowElement = event.currentTarget.closest('.app-window');
+    if (desktopBounds && windowElement instanceof HTMLElement) {
+      const windowBounds = windowElement.getBoundingClientRect();
+      originX = windowBounds.left - desktopBounds.left;
+      originY = windowBounds.top - desktopBounds.top;
+    }
+
+    setDragState({
+      key,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX,
+      originY
+    });
   };
 
   const startWindowResize = (event: ReactPointerEvent, key: DesktopWindowKey, direction: ResizeDirection) => {
