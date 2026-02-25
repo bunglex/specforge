@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Canvas from '../components/Canvas';
@@ -27,6 +27,11 @@ type DockSlot = 'left' | 'center' | 'right';
 type DesktopWindowState = {
   x: number;
   y: number;
+  width: number;
+  height: number;
+  dockSize: number;
+  minWidth: number;
+  minHeight: number;
   z: number;
   visible: boolean;
   minimized: boolean;
@@ -48,6 +53,19 @@ type DragState = {
   startY: number;
   originX: number;
   originY: number;
+};
+
+type ResizeDirection = 'right' | 'left' | 'bottom' | 'corner';
+
+type ResizeState = {
+  key: DesktopWindowKey;
+  pointerId: number;
+  direction: ResizeDirection;
+  startX: number;
+  startY: number;
+  originWidth: number;
+  originHeight: number;
+  originX: number;
 };
 
 function reducer(state: EditorState, action: EditorAction): EditorState {
@@ -105,9 +123,9 @@ function reorderById<T extends { id: string | number }>(items: T[], fromId: stri
 const LIBRARY_TABS = ['project', 'clauses', 'assembly', 'materials', 'products'] as const;
 const WINDOW_KEYS: DesktopWindowKey[] = ['library', 'browser', 'properties'];
 const DEFAULT_WINDOWS: Record<DesktopWindowKey, DesktopWindowState> = {
-  library: { x: 16, y: 16, z: 1, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'left' },
-  browser: { x: 336, y: 16, z: 2, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'center' },
-  properties: { x: 980, y: 16, z: 3, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'right' }
+  library: { x: 16, y: 16, width: 300, height: 620, dockSize: 300, minWidth: 240, minHeight: 260, z: 1, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'left' },
+  browser: { x: 336, y: 16, width: 620, height: 620, dockSize: 620, minWidth: 380, minHeight: 260, z: 2, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'center' },
+  properties: { x: 980, y: 16, width: 320, height: 620, dockSize: 320, minWidth: 260, minHeight: 260, z: 3, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'right' }
 };
 
 type LibraryTab = typeof LIBRARY_TABS[number];
@@ -119,6 +137,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const [activeLibrary, setActiveLibrary] = useState<LibraryTab>('project');
   const [desktopWindows, setDesktopWindows] = useState<Record<DesktopWindowKey, DesktopWindowState>>(DEFAULT_WINDOWS);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const [highestZ, setHighestZ] = useState(3);
   const [openMenu, setOpenMenu] = useState<'file' | 'edit' | 'view' | 'help' | null>(null);
   const [openCascade, setOpenCascade] = useState<'view-windows' | null>(null);
@@ -179,26 +198,77 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   };
 
   useEffect(() => {
-    if (!dragState) return;
+    if (!dragState && !resizeState) return;
 
     const onPointerMove = (event: PointerEvent) => {
-      const desktopBounds = desktopRef.current?.getBoundingClientRect();
-      const maxX = desktopBounds ? Math.max(0, desktopBounds.width - 260) : Number.POSITIVE_INFINITY;
-      const maxY = desktopBounds ? Math.max(0, desktopBounds.height - 120) : Number.POSITIVE_INFINITY;
-      setDesktopWindows((prev) => ({
-        ...prev,
-        [dragState.key]: {
-          ...prev[dragState.key],
-          x: Math.min(maxX, Math.max(0, dragState.originX + event.clientX - dragState.startX)),
-          y: Math.min(maxY, Math.max(0, dragState.originY + event.clientY - dragState.startY)),
-          docked: false,
-          maximized: false
-        }
-      }));
+      if (dragState) {
+        const desktopBounds = desktopRef.current?.getBoundingClientRect();
+        const maxX = desktopBounds ? Math.max(0, desktopBounds.width - 260) : Number.POSITIVE_INFINITY;
+        const maxY = desktopBounds ? Math.max(0, desktopBounds.height - 120) : Number.POSITIVE_INFINITY;
+        setDesktopWindows((prev) => ({
+          ...prev,
+          [dragState.key]: {
+            ...prev[dragState.key],
+            x: Math.min(maxX, Math.max(0, dragState.originX + event.clientX - dragState.startX)),
+            y: Math.min(maxY, Math.max(0, dragState.originY + event.clientY - dragState.startY)),
+            docked: false,
+            maximized: false
+          }
+        }));
+      }
+
+      if (resizeState) {
+        const deltaX = event.clientX - resizeState.startX;
+        const deltaY = event.clientY - resizeState.startY;
+
+        setDesktopWindows((prev) => {
+          const current = prev[resizeState.key];
+          const desktopBounds = desktopRef.current?.getBoundingClientRect();
+          let nextWidth = current.width;
+          let nextHeight = current.height;
+          let nextX = current.x;
+          let nextDockSize = current.dockSize;
+
+          if (resizeState.direction === 'left' || resizeState.direction === 'corner' || resizeState.direction === 'right') {
+            if (current.docked) {
+              const proposed = resizeState.direction === 'left' ? resizeState.originWidth - deltaX : resizeState.originWidth + deltaX;
+              const clamped = Math.max(current.minWidth, Math.min(520, proposed));
+              nextDockSize = clamped;
+            } else {
+              if (resizeState.direction === 'left') {
+                const proposed = resizeState.originWidth - deltaX;
+                const clamped = Math.max(current.minWidth, proposed);
+                nextWidth = clamped;
+                nextX = resizeState.originX + (resizeState.originWidth - clamped);
+              } else {
+                nextWidth = Math.max(current.minWidth, resizeState.originWidth + deltaX);
+              }
+            }
+          }
+
+          if (!current.docked && (resizeState.direction === 'bottom' || resizeState.direction === 'corner')) {
+            const maxHeight = desktopBounds ? Math.max(current.minHeight, desktopBounds.height - current.y - 6) : Number.POSITIVE_INFINITY;
+            nextHeight = Math.min(maxHeight, Math.max(current.minHeight, resizeState.originHeight + deltaY));
+          }
+
+          return {
+            ...prev,
+            [resizeState.key]: {
+              ...current,
+              x: nextX,
+              width: nextWidth,
+              height: nextHeight,
+              dockSize: nextDockSize,
+              docked: current.docked,
+              maximized: false
+            }
+          };
+        });
+      }
     };
 
     const onPointerUp = (event: PointerEvent) => {
-      if (event.pointerId === dragState.pointerId) {
+      if (dragState && event.pointerId === dragState.pointerId) {
         const dockSlot = maybeGetDockSlot(event.clientX, event.clientY);
         if (dockSlot) {
           dockWindowToSlot(dragState.key, dockSlot);
@@ -214,6 +284,10 @@ export default function EditorPage({ clauses }: EditorPageProps) {
         }
         setDragState(null);
       }
+
+      if (resizeState && event.pointerId === resizeState.pointerId) {
+        setResizeState(null);
+      }
     };
 
     window.addEventListener('pointermove', onPointerMove);
@@ -222,7 +296,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [dragState]);
+  }, [dragState, resizeState]);
 
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
@@ -388,29 +462,77 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     setHelpMessage(`${key} window closed. Use View → Windows to show it again.`);
   };
 
+  const getDockWindow = (slot: DockSlot) => (
+    WINDOW_KEYS.find((key) => {
+      const current = desktopWindows[key];
+      return current.visible && !current.minimized && current.docked && current.dockSlot === slot;
+    })
+  );
+
   const getWindowStyle = (key: DesktopWindowKey) => {
     const state = desktopWindows[key];
+    const desktopBounds = desktopRef.current?.getBoundingClientRect();
+    const leftDockKey = getDockWindow('left');
+    const rightDockKey = getDockWindow('right');
+    const leftDockWidth = leftDockKey ? desktopWindows[leftDockKey].dockSize : 0;
+    const rightDockWidth = rightDockKey ? desktopWindows[rightDockKey].dockSize : 0;
+    const sideGap = 8;
+
     if (state.maximized) {
       return { left: 12, right: 12, top: 12, bottom: minimizedKeys.length ? 54 : 12, zIndex: state.z };
     }
     if (!state.docked) {
-      return { left: state.x, top: state.y, zIndex: state.z };
-    }
-
-    if (state.dockSlot === 'left') {
-      return { left: 12, top: 12, bottom: 12, width: 'clamp(260px, 22%, 320px)', zIndex: state.z };
-    }
-    if (state.dockSlot === 'center') {
+      const maxWidth = desktopBounds ? Math.max(state.minWidth, desktopBounds.width - state.x - 8) : state.width;
       return {
-        left: 'calc(clamp(260px, 22%, 320px) + 20px)',
-        top: 12,
-        bottom: 12,
-        right: 'calc(clamp(280px, 24%, 360px) + 20px)',
-        minWidth: 340,
+        left: state.x,
+        top: state.y,
+        width: Math.max(state.minWidth, Math.min(maxWidth, state.width)),
+        height: state.height,
         zIndex: state.z
       };
     }
-    return { right: 12, top: 12, bottom: 12, width: 'clamp(280px, 24%, 360px)', zIndex: state.z };
+
+    if (state.dockSlot === 'left') {
+      return { left: 12, top: 12, bottom: 12, width: state.dockSize, zIndex: state.z };
+    }
+    if (state.dockSlot === 'center') {
+      return {
+        left: leftDockWidth ? 12 + leftDockWidth + sideGap : 12,
+        top: 12,
+        bottom: 12,
+        right: rightDockWidth ? 12 + rightDockWidth + sideGap : 12,
+        minWidth: state.minWidth,
+        zIndex: state.z
+      };
+    }
+    return { right: 12, top: 12, bottom: 12, width: state.dockSize, zIndex: state.z };
+  };
+
+
+  const startWindowDrag = (event: ReactPointerEvent, key: DesktopWindowKey) => {
+    event.preventDefault();
+    bringToFront(key);
+    const windowState = desktopWindows[key];
+    if (windowState.maximized || resizeState) return;
+    setDragState({ key, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: windowState.x, originY: windowState.y });
+  };
+
+  const startWindowResize = (event: ReactPointerEvent, key: DesktopWindowKey, direction: ResizeDirection) => {
+    event.preventDefault();
+    event.stopPropagation();
+    bringToFront(key);
+    const windowState = desktopWindows[key];
+    if (windowState.maximized || dragState) return;
+    setResizeState({
+      key,
+      pointerId: event.pointerId,
+      direction,
+      startX: event.clientX,
+      startY: event.clientY,
+      originWidth: windowState.docked ? windowState.dockSize : windowState.width,
+      originHeight: windowState.height,
+      originX: windowState.x
+    });
   };
 
   const handleTreeSelection = (node: TreeNodeItem) => {
@@ -562,12 +684,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           >
             <div
               className="window-titlebar draggable"
-              onPointerDown={(event) => {
-                event.preventDefault();
-                bringToFront('library');
-                if (desktopWindows.library.maximized) return;
-                setDragState({ key: 'library', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.library.x, originY: desktopWindows.library.y });
-              }}
+              onPointerDown={(event) => startWindowDrag(event, 'library')}
             >
               <span>Library browser</span>
               <div className="window-controls">
@@ -599,6 +716,20 @@ export default function EditorPage({ clauses }: EditorPageProps) {
                 return [{ label: 'Open item', onClick: () => handleTreeSelection(node) }];
               }}
             />
+            {desktopWindows.library.docked ? (
+              <button
+                type="button"
+                className={desktopWindows.library.dockSlot === 'right' ? 'window-resize-handle window-resize-left' : 'window-resize-handle window-resize-right'}
+                aria-label="Resize library browser"
+                onPointerDown={(event) => startWindowResize(event, 'library', desktopWindows.library.dockSlot === 'right' ? 'left' : 'right')}
+              />
+            ) : (
+              <>
+                <button type="button" className="window-resize-handle window-resize-right" aria-label="Resize library browser width" onPointerDown={(event) => startWindowResize(event, 'library', 'right')} />
+                <button type="button" className="window-resize-handle window-resize-bottom" aria-label="Resize library browser height" onPointerDown={(event) => startWindowResize(event, 'library', 'bottom')} />
+                <button type="button" className="window-resize-handle window-resize-corner" aria-label="Resize library browser" onPointerDown={(event) => startWindowResize(event, 'library', 'corner')} />
+              </>
+            )}
           </aside>
         ) : null}
 
@@ -610,12 +741,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           >
             <div
               className="window-titlebar draggable"
-              onPointerDown={(event) => {
-                event.preventDefault();
-                bringToFront('browser');
-                if (desktopWindows.browser.maximized) return;
-                setDragState({ key: 'browser', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.browser.x, originY: desktopWindows.browser.y });
-              }}
+              onPointerDown={(event) => startWindowDrag(event, 'browser')}
             >
               <span>Document browser</span>
               <div className="window-controls">
@@ -632,6 +758,19 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               onSelectBlock={(blockId) => dispatch({ type: 'select_block', blockId })}
               compact
             />
+            {desktopWindows.browser.docked ? (
+              desktopWindows.browser.dockSlot === 'right' ? (
+                <button type="button" className="window-resize-handle window-resize-left" aria-label="Resize document browser" onPointerDown={(event) => startWindowResize(event, 'browser', 'left')} />
+              ) : (
+                <button type="button" className="window-resize-handle window-resize-right" aria-label="Resize document browser" onPointerDown={(event) => startWindowResize(event, 'browser', 'right')} />
+              )
+            ) : (
+              <>
+                <button type="button" className="window-resize-handle window-resize-right" aria-label="Resize document browser width" onPointerDown={(event) => startWindowResize(event, 'browser', 'right')} />
+                <button type="button" className="window-resize-handle window-resize-bottom" aria-label="Resize document browser height" onPointerDown={(event) => startWindowResize(event, 'browser', 'bottom')} />
+                <button type="button" className="window-resize-handle window-resize-corner" aria-label="Resize document browser" onPointerDown={(event) => startWindowResize(event, 'browser', 'corner')} />
+              </>
+            )}
           </section>
         ) : null}
 
@@ -643,12 +782,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           >
             <div
               className="window-titlebar draggable"
-              onPointerDown={(event) => {
-                event.preventDefault();
-                bringToFront('properties');
-                if (desktopWindows.properties.maximized) return;
-                setDragState({ key: 'properties', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.properties.x, originY: desktopWindows.properties.y });
-              }}
+              onPointerDown={(event) => startWindowDrag(event, 'properties')}
             >
               <span>Properties</span>
               <div className="window-controls">
@@ -674,6 +808,20 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               }}
               onOpenClausePicker={() => dispatch({ type: 'toggle_clause_picker', open: true })}
             />
+            {desktopWindows.properties.docked ? (
+              <button
+                type="button"
+                className={desktopWindows.properties.dockSlot === 'right' ? 'window-resize-handle window-resize-left' : 'window-resize-handle window-resize-right'}
+                aria-label="Resize properties panel"
+                onPointerDown={(event) => startWindowResize(event, 'properties', desktopWindows.properties.dockSlot === 'right' ? 'left' : 'right')}
+              />
+            ) : (
+              <>
+                <button type="button" className="window-resize-handle window-resize-right" aria-label="Resize properties panel width" onPointerDown={(event) => startWindowResize(event, 'properties', 'right')} />
+                <button type="button" className="window-resize-handle window-resize-bottom" aria-label="Resize properties panel height" onPointerDown={(event) => startWindowResize(event, 'properties', 'bottom')} />
+                <button type="button" className="window-resize-handle window-resize-corner" aria-label="Resize properties panel" onPointerDown={(event) => startWindowResize(event, 'properties', 'corner')} />
+              </>
+            )}
           </aside>
         ) : null}
       </section>
