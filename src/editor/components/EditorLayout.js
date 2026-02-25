@@ -13,12 +13,14 @@ export function renderEditorLayout({
   taxonomy,
   clauses,
   leftSearch,
+  activeLeftTab,
+  tocSearch,
   allVariables
 }) {
   return `
     <section class="editor-layout editor-layout-3pane">
       <aside class="panel toc-panel">
-        ${renderTOC({ sections: filteredSections, activeSectionId, taxonomy, clauses, leftSearch })}
+        ${renderTOC({ sections: filteredSections, activeSectionId, taxonomy, clauses, leftSearch, activeLeftTab, tocSearch })}
       </aside>
 
       <section class="panel preview-panel">

@@ -115,7 +115,23 @@ export function getBlockRawBody(block, clauseMap) {
 }
 
 export function renderWithVariables(content, values) {
-  return (content || '').replaceAll(/{{\s*([a-zA-Z0-9_\-.]+)\s*}}/g, (_, key) => values?.[key] || `{{${key}}}`);
+  return resolveVariables(content, values).text;
+}
+
+export function resolveVariables(content, values = {}) {
+  const missingKeys = new Set();
+  const text = (content || '').replaceAll(/{{\s*([a-zA-Z0-9_\-.]+)\s*}}/g, (_, key) => {
+    if (values?.[key] !== undefined && values?.[key] !== null && values?.[key] !== '') {
+      return String(values[key]);
+    }
+    missingKeys.add(key);
+    return `⟪missing:${key}⟫`;
+  });
+
+  return {
+    text,
+    missingKeys: [...missingKeys]
+  };
 }
 
 export function getRenderedBlockBody(block, clauseMap, values) {

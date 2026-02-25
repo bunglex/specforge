@@ -90,3 +90,10 @@ button.ghost { background: rgba(30, 41, 59, 1); border: 1px solid rgba(148, 163,
   0% { outline: 2px solid rgba(56,189,248,0.9); }
   100% { outline: 2px solid transparent; }
 }
+
+.left-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.left-tabs button.active { outline: 2px solid #38bdf8; }
+.section-list { max-height: 58vh; overflow: auto; padding-right: 0.25rem; }
+.section-item { border: 1px solid rgba(148,163,184,0.2); border-radius: 10px; padding: 0.45rem; display: grid; gap: 0.35rem; }
+.section-item.active { border-color: rgba(56,189,248,0.8); }
+.var-token.missing { color: #fca5a5; font-weight: 700; }

@@ -39,14 +39,39 @@ const initialState = {
     selectedTag: 'all',
     selectedTaxonomy: 'all',
     leftSearch: '',
+    leftTab: 'document',
     modalOpen: false,
     autosaveTimer: null,
     dirty: false,
-    observer: null
+    observer: null,
+    saveInFlight: null,
+    pendingSave: false,
+    lastSavedFingerprint: ''
   }
 };
 
 const state = createStore(initialState).getState();
+
+
+const DEBUG_EDITOR = import.meta.env.VITE_EDITOR_DEBUG === 'true';
+
+function logDebug(...args) {
+  if (DEBUG_EDITOR) {
+    console.debug('[spec-writer]', ...args);
+  }
+}
+
+function getDocumentFingerprint(document) {
+  if (!document) {
+    return '';
+  }
+  return JSON.stringify({
+    title: document.title || '',
+    project_name: document.project_name || '',
+    structure: document.structure || {},
+    variable_values: document.variable_values || {}
+  });
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -97,30 +122,88 @@ function getSelectedBlock() {
   return section?.blocks?.find((block) => block.id === state.editor.selectedBlockId) || null;
 }
 
-function markEditorDirty() {
-  state.editor.dirty = true;
-  state.saveState = 'Unsaved changes';
+function scheduleAutosave() {
   window.clearTimeout(state.editor.autosaveTimer);
   state.editor.autosaveTimer = window.setTimeout(() => {
-    saveEditorDocument();
+    void saveEditorDocument();
   }, 900);
 }
 
-async function saveEditorDocument() {
-  if (!state.editor.document || !state.editor.dirty) {
+function markEditorDirty() {
+  if (!state.editor.document) {
     return;
   }
-  try {
-    state.saveState = 'Saving…';
-    render();
-    state.editor.document = await saveDocument(state.editor.document);
+  const fingerprint = getDocumentFingerprint(state.editor.document);
+  if (fingerprint === state.editor.lastSavedFingerprint) {
     state.editor.dirty = false;
-    state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
-    await refreshContext();
-  } catch (error) {
-    state.saveState = `Failed to save: ${error.message}`;
+    state.saveState = state.saveState.startsWith('Failed to save:') ? state.saveState : `Saved at ${new Date().toLocaleTimeString()}`;
+    return;
   }
+
+  state.editor.dirty = true;
+  state.saveState = 'Unsaved changes';
+  scheduleAutosave();
+}
+
+async function saveEditorDocument() {
+  if (!state.editor.document) {
+    return;
+  }
+
+  const currentFingerprint = getDocumentFingerprint(state.editor.document);
+  if (!state.editor.dirty || currentFingerprint === state.editor.lastSavedFingerprint) {
+    state.editor.dirty = false;
+    return;
+  }
+
+  if (state.editor.saveInFlight) {
+    state.editor.pendingSave = true;
+    logDebug('Save already in flight, queued next save');
+    return state.editor.saveInFlight;
+  }
+
+  state.saveState = 'Saving...';
   render();
+
+  state.editor.saveInFlight = (async () => {
+    let saveError = null;
+    try {
+      logDebug('Saving document', state.editor.document.id);
+      const savedDocument = await saveDocument(state.editor.document);
+      state.editor.document = savedDocument;
+      state.editor.lastSavedFingerprint = getDocumentFingerprint(savedDocument);
+      state.editor.dirty = false;
+      state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      saveError = error;
+      state.saveState = `Failed to save: ${error.message}`;
+      logDebug('Save failed', error);
+    }
+
+    try {
+      await refreshContext({ silent: true });
+    } catch (error) {
+      state.contextError = `Saved, but failed to refresh context: ${error.message}`;
+      logDebug('Refresh after save failed', error);
+    }
+
+    state.editor.saveInFlight = null;
+    const shouldRunQueued = state.editor.pendingSave;
+    state.editor.pendingSave = false;
+    render();
+
+    if (shouldRunQueued && state.editor.dirty) {
+      logDebug('Running queued save');
+      return saveEditorDocument();
+    }
+
+    if (saveError) {
+      throw saveError;
+    }
+    return state.editor.document;
+  })();
+
+  return state.editor.saveInFlight;
 }
 
 function updateSection(sectionId, mutator) {
@@ -134,20 +217,68 @@ function updateSection(sectionId, mutator) {
 }
 
 function updateBlock(sectionId, blockId, mutator) {
+  if (!sectionId || !blockId) {
+    return;
+  }
   updateSection(sectionId, (section) => ({
     ...section,
     blocks: (section.blocks || []).map((block) => (block.id === blockId ? mutator(block) : block))
   }));
 }
 
-async function refreshContext() {
+function setActiveSectionByIndex(index) {
+  const sections = getEditorSections();
+  const bounded = Math.max(0, Math.min(index, sections.length - 1));
+  const nextSection = sections[bounded];
+  state.editor.activeSectionId = nextSection?.id || '';
+  state.editor.selectedBlockSectionId = nextSection?.id || '';
+  state.editor.selectedBlockId = nextSection?.blocks?.[0]?.id || '';
+}
+
+function moveSection(sectionId, direction) {
+  const sections = getEditorSections();
+  const index = sections.findIndex((section) => section.id === sectionId);
+  if (index < 0) {
+    return;
+  }
+  const nextIndex = direction === 'up' ? index - 1 : index + 1;
+  if (nextIndex < 0 || nextIndex >= sections.length) {
+    return;
+  }
+
+  const [section] = sections.splice(index, 1);
+  sections.splice(nextIndex, 0, section);
+  setActiveSectionByIndex(nextIndex);
+  markEditorDirty();
+}
+
+function deleteSection(sectionId) {
+  const sections = getEditorSections();
+  if (sections.length <= 1) {
+    state.saveState = 'Document requires at least one section';
+    return;
+  }
+
+  const index = sections.findIndex((section) => section.id === sectionId);
+  if (index < 0) {
+    return;
+  }
+
+  sections.splice(index, 1);
+  setActiveSectionByIndex(index);
+  markEditorDirty();
+}
+
+async function refreshContext({ silent = false } = {}) {
   if (!state.session || !supabase) {
     return;
   }
 
   state.contextLoading = true;
   state.contextError = '';
-  render();
+  if (!silent) {
+    render();
+  }
 
   try {
     const data = await loadWorkspaceContext();
@@ -166,10 +297,16 @@ async function refreshContext() {
     }
   } catch (error) {
     state.contextError = error.message;
+    if (silent) {
+      state.contextLoading = false;
+      throw error;
+    }
   }
 
   state.contextLoading = false;
-  render();
+  if (!silent) {
+    render();
+  }
 }
 
 function authScreen() {
@@ -299,10 +436,11 @@ function editorScreen() {
     (section.title || '').toLowerCase().includes(state.editor.tocSearch.toLowerCase().trim())
   );
 
-  document._workspaceClauses = state.clauses.filter((clause) => String(clause.workspace_id) === String(document.workspace_id));
-  const workspaceTaxonomy = state.taxonomy.filter((item) => String(item.workspace_id) === String(document.workspace_id));
-  const workspaceClauses = document._workspaceClauses;
-  const allVariables = [...new Set(Object.keys(document.variable_values || {}).concat(extractVariablesFromDocument(document, new Map(workspaceClauses.map((c) => [String(c.id), c])))))].sort();
+  const workspaceClauses = (state.clauses || []).filter((clause) => String(clause.workspace_id) === String(document.workspace_id));
+  document._workspaceClauses = workspaceClauses;
+  const workspaceTaxonomy = (state.taxonomy || []).filter((item) => String(item.workspace_id) === String(document.workspace_id));
+  const clauseMap = new Map(workspaceClauses.map((clause) => [String(clause.id), clause]));
+  const allVariables = [...new Set(Object.keys(document.variable_values || {}).concat(extractVariablesFromDocument(document, clauseMap)))].sort();
 
   return `
   <main class="shell editor-shell">
@@ -329,6 +467,8 @@ function editorScreen() {
       taxonomy: workspaceTaxonomy,
       clauses: workspaceClauses,
       leftSearch: state.editor.leftSearch,
+      activeLeftTab: state.editor.leftTab,
+      tocSearch: state.editor.tocSearch,
       allVariables
     })}
 
@@ -389,17 +529,26 @@ function setupIntersectionObserver() {
 }
 
 function wireEditorSpecificEvents() {
+  if (!state.editor.document) {
+    return;
+  }
+
   document.querySelector('#save-document')?.addEventListener('click', async () => {
     state.editor.dirty = true;
     await saveEditorDocument();
   });
 
+  document.querySelectorAll('[data-left-tab]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      state.editor.leftTab = event.currentTarget.dataset.leftTab;
+      render();
+    });
+  });
+
   document.querySelector('#add-section')?.addEventListener('click', () => {
     const section = { id: crypto.randomUUID(), title: 'New section', blocks: [createTextBlock('')] };
     state.editor.document.structure.sections.push(section);
-    state.editor.activeSectionId = section.id;
-    state.editor.selectedBlockId = section.blocks[0].id;
-    state.editor.selectedBlockSectionId = section.id;
+    setActiveSectionByIndex(state.editor.document.structure.sections.length - 1);
     markEditorDirty();
     render();
   });
@@ -414,10 +563,53 @@ function wireEditorSpecificEvents() {
     render();
   });
 
+  document.querySelectorAll('[data-section-rename]').forEach((input) => {
+    input.addEventListener('input', (event) => {
+      const sectionId = event.currentTarget.dataset.sectionRename;
+      updateSection(sectionId, (section) => ({ ...section, title: event.target.value || 'Untitled section' }));
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-section-move-up]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      moveSection(event.currentTarget.dataset.sectionMoveUp, 'up');
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-section-move-down]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      moveSection(event.currentTarget.dataset.sectionMoveDown, 'down');
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-delete-section]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const sectionId = event.currentTarget.dataset.deleteSection;
+      const section = getEditorSections().find((item) => item.id === sectionId);
+      if (!section) {
+        return;
+      }
+      const confirmed = window.confirm(`Delete section "${section.title || 'Untitled section'}"?`);
+      if (!confirmed) {
+        return;
+      }
+      deleteSection(sectionId);
+      render();
+    });
+  });
+
   document.querySelectorAll('[data-scroll-section]').forEach((button) => {
     button.addEventListener('click', (event) => {
       const sectionId = event.currentTarget.dataset.scrollSection;
       state.editor.activeSectionId = sectionId;
+      state.editor.selectedBlockSectionId = sectionId;
+      const section = getEditorSections().find((item) => item.id === sectionId);
+      if (section && !section.blocks?.some((block) => block.id === state.editor.selectedBlockId)) {
+        state.editor.selectedBlockId = section.blocks?.[0]?.id || '';
+      }
       const anchor = document.querySelector(`#section-${sectionId}`);
       anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       if (anchor) {
@@ -572,7 +764,7 @@ function wireEditorSpecificEvents() {
     insertVariableToken(key);
   });
 
-  const clauseMap = new Map((state.editor.document._workspaceClauses || []).map((clause) => [String(clause.id), clause]));
+  const clauseMap = new Map((state.editor.document?._workspaceClauses || []).map((clause) => [String(clause.id), clause]));
   const selectedBlock = getSelectedBlock();
   const variables = selectedBlock ? [...extractVariablesFromDocument({ structure: { sections: [{ blocks: [selectedBlock] }] } }, clauseMap)] : [];
   const variableContainer = document.querySelector('#inspector-variable-list');
@@ -664,9 +856,13 @@ async function loadEditorDocument(documentId) {
     state.editor.selectedBlockId = document.structure?.sections?.[0]?.blocks?.[0]?.id || '';
     state.editor.tocSearch = '';
     state.editor.leftSearch = '';
+    state.editor.leftTab = 'document';
     state.editor.modalOpen = false;
     state.editor.dirty = migrated;
-    state.saveState = migrated ? 'Unsaved changes (legacy sections converted to blocks)' : 'Saved';
+    state.editor.pendingSave = false;
+    state.editor.saveInFlight = null;
+    state.editor.lastSavedFingerprint = getDocumentFingerprint(document);
+    state.saveState = migrated ? 'Unsaved changes (legacy sections converted to blocks)' : `Saved at ${new Date().toLocaleTimeString()}`;
     if (migrated) {
       await saveEditorDocument();
     }
