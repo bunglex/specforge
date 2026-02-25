@@ -29,8 +29,16 @@ type DesktopWindowState = {
   y: number;
   z: number;
   visible: boolean;
+  minimized: boolean;
+  maximized: boolean;
   docked: boolean;
   dockSlot: DockSlot;
+  restore?: {
+    x: number;
+    y: number;
+    docked: boolean;
+    dockSlot: DockSlot;
+  };
 };
 
 type DragState = {
@@ -95,10 +103,11 @@ function reorderById<T extends { id: string | number }>(items: T[], fromId: stri
 }
 
 const LIBRARY_TABS = ['project', 'clauses', 'assembly', 'materials', 'products'] as const;
+const WINDOW_KEYS: DesktopWindowKey[] = ['library', 'browser', 'properties'];
 const DEFAULT_WINDOWS: Record<DesktopWindowKey, DesktopWindowState> = {
-  library: { x: 16, y: 16, z: 1, visible: true, docked: true, dockSlot: 'left' },
-  browser: { x: 336, y: 16, z: 2, visible: true, docked: true, dockSlot: 'center' },
-  properties: { x: 980, y: 16, z: 3, visible: true, docked: true, dockSlot: 'right' }
+  library: { x: 16, y: 16, z: 1, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'left' },
+  browser: { x: 336, y: 16, z: 2, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'center' },
+  properties: { x: 980, y: 16, z: 3, visible: true, minimized: false, maximized: false, docked: true, dockSlot: 'right' }
 };
 
 type LibraryTab = typeof LIBRARY_TABS[number];
@@ -133,11 +142,16 @@ export default function EditorPage({ clauses }: EditorPageProps) {
 
     const relativeX = clientX - bounds.left;
     const relativeY = clientY - bounds.top;
-    const snapDistance = 110;
+    const snapDistance = 140;
+    const topSnapBand = Math.min(180, bounds.height * 0.3);
 
     if (relativeX <= snapDistance) return 'left';
     if (relativeX >= bounds.width - snapDistance) return 'right';
-    if (relativeY <= snapDistance) return 'center';
+    if (relativeY <= topSnapBand) {
+      if (relativeX < bounds.width * 0.33) return 'left';
+      if (relativeX > bounds.width * 0.66) return 'right';
+      return 'center';
+    }
     return null;
   };
 
@@ -161,6 +175,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
       }
       return next;
     });
+    setHelpMessage(`${key} snapped to ${slot} dock.`);
   };
 
   useEffect(() => {
@@ -176,7 +191,8 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           ...prev[dragState.key],
           x: Math.min(maxX, Math.max(0, dragState.originX + event.clientX - dragState.startX)),
           y: Math.min(maxY, Math.max(0, dragState.originY + event.clientY - dragState.startY)),
-          docked: false
+          docked: false,
+          maximized: false
         }
       }));
     };
@@ -261,7 +277,8 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   }), []);
 
   const activeNodes = activeLibrary === 'project' ? projectTreeNodes : sharedLibraryNodes[activeLibrary];
-  const visibleWindowCount = (Object.values(desktopWindows) as DesktopWindowState[]).filter((windowState) => windowState.visible).length;
+  const visibleWindowCount = (Object.values(desktopWindows) as DesktopWindowState[]).filter((windowState) => windowState.visible && !windowState.minimized).length;
+  const minimizedKeys = WINDOW_KEYS.filter((key) => desktopWindows[key].visible && desktopWindows[key].minimized);
 
   const updateSelectedBlock = (updater: (block: any) => any) => {
     if (!document || !state.selectedBlockId) return;
@@ -279,10 +296,53 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   };
 
   const setWindowVisibility = (key: DesktopWindowKey, visible: boolean) => {
-    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], visible } }));
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], visible, minimized: false } }));
     if (visible) {
       bringToFront(key);
     }
+  };
+
+  const minimizeWindow = (key: DesktopWindowKey) => {
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], minimized: true, maximized: false } }));
+    setHelpMessage(`${key} minimized.`);
+  };
+
+  const restoreWindow = (key: DesktopWindowKey) => {
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], visible: true, minimized: false } }));
+    bringToFront(key);
+  };
+
+  const toggleMaximizeWindow = (key: DesktopWindowKey) => {
+    setDesktopWindows((prev) => {
+      const current = prev[key];
+      if (current.maximized) {
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            maximized: false,
+            ...(current.restore || {})
+          }
+        };
+      }
+
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          minimized: false,
+          maximized: true,
+          docked: false,
+          restore: {
+            x: current.x,
+            y: current.y,
+            docked: current.docked,
+            dockSlot: current.dockSlot
+          }
+        }
+      };
+    });
+    bringToFront(key);
   };
 
   const resetLayout = () => {
@@ -295,20 +355,44 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     setDesktopWindows((prev) => {
       const next: Record<DesktopWindowKey, DesktopWindowState> = { ...prev };
       (Object.keys(prev) as DesktopWindowKey[]).forEach((key) => {
-        next[key] = { ...prev[key], visible: true };
+        next[key] = { ...prev[key], visible: true, minimized: false };
       });
       return next;
     });
     setHelpMessage('All windows shown.');
   };
 
+  const cascadeWindows = () => {
+    setDesktopWindows((prev) => {
+      const next: Record<DesktopWindowKey, DesktopWindowState> = { ...prev };
+      WINDOW_KEYS.forEach((key, index) => {
+        next[key] = {
+          ...prev[key],
+          visible: true,
+          minimized: false,
+          maximized: false,
+          docked: false,
+          x: 24 + index * 44,
+          y: 24 + index * 40,
+          z: highestZ + index + 1
+        };
+      });
+      return next;
+    });
+    setHighestZ((value) => value + WINDOW_KEYS.length + 1);
+    setHelpMessage('Windows cascaded.');
+  };
+
   const closeWindow = (key: DesktopWindowKey) => {
-    setWindowVisibility(key, false);
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], visible: false, minimized: false, maximized: false } }));
     setHelpMessage(`${key} window closed. Use View → Windows to show it again.`);
   };
 
   const getWindowStyle = (key: DesktopWindowKey) => {
     const state = desktopWindows[key];
+    if (state.maximized) {
+      return { left: 12, right: 12, top: 12, bottom: minimizedKeys.length ? 54 : 12, zIndex: state.z };
+    }
     if (!state.docked) {
       return { left: state.x, top: state.y, zIndex: state.z };
     }
@@ -423,14 +507,16 @@ export default function EditorPage({ clauses }: EditorPageProps) {
                     </button>
                     {openCascade === 'view-windows' ? (
                       <div className="menu-dropdown menu-dropdown-cascade">
-                        {(['library', 'browser', 'properties'] as DesktopWindowKey[]).map((key) => (
+                        {WINDOW_KEYS.map((key) => (
                           <button key={key} type="button" className="menu-item" onClick={() => setWindowVisibility(key, !desktopWindows[key].visible)}>
-                            {desktopWindows[key].visible ? '✓' : ''} {key}
+                            {desktopWindows[key].visible && !desktopWindows[key].minimized ? '✓' : ''} {key}
                           </button>
                         ))}
                       </div>
                     ) : null}
                   </div>
+                  <button type="button" className="menu-item" onClick={() => { cascadeWindows(); setOpenMenu(null); setOpenCascade(null); }}>Cascade windows</button>
+                  <button type="button" className="menu-item" onClick={() => { showAllWindows(); setOpenMenu(null); setOpenCascade(null); }}>Show all windows</button>
                   <button type="button" className="menu-item" onClick={() => { resetLayout(); setOpenMenu(null); setOpenCascade(null); }}>Reset layout</button>
                 </div>
               ) : null}
@@ -468,7 +554,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           </div>
         ) : null}
 
-        {desktopWindows.library.visible ? (
+        {desktopWindows.library.visible && !desktopWindows.library.minimized ? (
           <aside
             className="panel app-window app-window-library"
             style={getWindowStyle('library')}
@@ -479,19 +565,16 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               onPointerDown={(event) => {
                 event.preventDefault();
                 bringToFront('library');
+                if (desktopWindows.library.maximized) return;
                 setDragState({ key: 'library', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.library.x, originY: desktopWindows.library.y });
               }}
             >
               <span>Library browser</span>
-              <button
-                type="button"
-                className="window-close"
-                aria-label="Close library browser"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => closeWindow('library')}
-              >
-                ×
-              </button>
+              <div className="window-controls">
+                <button type="button" className="window-control" aria-label="Minimize library browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => minimizeWindow('library')}>—</button>
+                <button type="button" className="window-control" aria-label="Maximize library browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => toggleMaximizeWindow('library')}>{desktopWindows.library.maximized ? '❐' : '□'}</button>
+                <button type="button" className="window-close" aria-label="Close library browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => closeWindow('library')}>×</button>
+              </div>
             </div>
             <div className="left-tabs">
               {LIBRARY_TABS.map((tab) => (
@@ -519,7 +602,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           </aside>
         ) : null}
 
-        {desktopWindows.browser.visible ? (
+        {desktopWindows.browser.visible && !desktopWindows.browser.minimized ? (
           <section
             className="panel app-window app-window-browser"
             style={getWindowStyle('browser')}
@@ -530,19 +613,16 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               onPointerDown={(event) => {
                 event.preventDefault();
                 bringToFront('browser');
+                if (desktopWindows.browser.maximized) return;
                 setDragState({ key: 'browser', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.browser.x, originY: desktopWindows.browser.y });
               }}
             >
               <span>Document browser</span>
-              <button
-                type="button"
-                className="window-close"
-                aria-label="Close document browser"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => closeWindow('browser')}
-              >
-                ×
-              </button>
+              <div className="window-controls">
+                <button type="button" className="window-control" aria-label="Minimize document browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => minimizeWindow('browser')}>—</button>
+                <button type="button" className="window-control" aria-label="Maximize document browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => toggleMaximizeWindow('browser')}>{desktopWindows.browser.maximized ? '❐' : '□'}</button>
+                <button type="button" className="window-close" aria-label="Close document browser" onPointerDown={(event) => event.stopPropagation()} onClick={() => closeWindow('browser')}>×</button>
+              </div>
             </div>
             <Canvas
               sections={sections}
@@ -555,7 +635,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           </section>
         ) : null}
 
-        {desktopWindows.properties.visible ? (
+        {desktopWindows.properties.visible && !desktopWindows.properties.minimized ? (
           <aside
             className="panel app-window app-window-properties"
             style={getWindowStyle('properties')}
@@ -566,19 +646,16 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               onPointerDown={(event) => {
                 event.preventDefault();
                 bringToFront('properties');
+                if (desktopWindows.properties.maximized) return;
                 setDragState({ key: 'properties', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.properties.x, originY: desktopWindows.properties.y });
               }}
             >
               <span>Properties</span>
-              <button
-                type="button"
-                className="window-close"
-                aria-label="Close properties"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => closeWindow('properties')}
-              >
-                ×
-              </button>
+              <div className="window-controls">
+                <button type="button" className="window-control" aria-label="Minimize properties" onPointerDown={(event) => event.stopPropagation()} onClick={() => minimizeWindow('properties')}>—</button>
+                <button type="button" className="window-control" aria-label="Maximize properties" onPointerDown={(event) => event.stopPropagation()} onClick={() => toggleMaximizeWindow('properties')}>{desktopWindows.properties.maximized ? '❐' : '□'}</button>
+                <button type="button" className="window-close" aria-label="Close properties" onPointerDown={(event) => event.stopPropagation()} onClick={() => closeWindow('properties')}>×</button>
+              </div>
             </div>
             <Inspector
               className="window-inspector"
@@ -600,6 +677,15 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           </aside>
         ) : null}
       </section>
+      {minimizedKeys.length ? (
+        <div className="panel windows-taskbar">
+          {minimizedKeys.map((key) => (
+            <button key={key} type="button" className="ghost taskbar-item" onClick={() => restoreWindow(key)}>
+              Restore {key}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <ClausePickerModal
         clauses={clauses}

@@ -331,7 +331,16 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
   user-select: none;
   min-height: 1.55rem;
   background: linear-gradient(180deg, #f1f5f9 0%, #cbd5e1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.window-control,
 .window-close {
   width: 1.35rem;
   min-width: 1.35rem;
@@ -347,10 +356,28 @@ button.ghost { background: #ffffff; border: 1px solid #cbd5e1; color: #334155; }
   place-items: center;
   padding: 0;
 }
+.window-control:hover {
+  background: #e2e8f0;
+  border-color: #64748b;
+  color: #0f172a;
+}
 .window-close:hover {
   background: #fee2e2;
   border-color: #ef4444;
   color: #991b1b;
+}
+.windows-taskbar {
+  margin-top: 0.45rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid #94a3b8;
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+}
+.taskbar-item {
+  text-transform: capitalize;
 }
 .app-window .preview-panel,
 .app-window .inspector-panel {
