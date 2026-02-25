@@ -1,33 +1,122 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useReducer } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { getBlockRawBody } from '../editor/model';
-import { renderTokenPreview } from '../components/tokenPreview';
+import AppShell from '../components/AppShell';
+import Canvas from '../components/Canvas';
+import ClausePickerModal from '../components/ClausePickerModal';
+import Inspector from '../components/Inspector';
 import { useDocument } from '../hooks/useDocument';
 
-export default function EditorPage({ clauses }: { clauses: any[] }) {
-  const { id } = useParams();
-  const { document, loading, error, saveState, saveDocumentDebounced } = useDocument(id);
+type EditorPageProps = {
+  clauses: any[];
+};
 
-  const clauseMap = useMemo(
-    () => new Map((clauses || []).map((clause) => [String(clause.id), clause])),
-    [clauses]
-  );
+type EditorState = {
+  selectedBlockId: string;
+  clausePickerOpen: boolean;
+};
 
-  if (loading) return <main className="shell"><section className="panel"><p>Loading editor…</p></section></main>;
-  if (error || !document) return <main className="shell"><section className="panel error-panel"><p>{error || 'Document not found'}</p><Link to="/dashboard"><button className="ghost">Back</button></Link></section></main>;
+type EditorAction =
+  | { type: 'initialize_selection'; blockId: string }
+  | { type: 'select_block'; blockId: string }
+  | { type: 'toggle_clause_picker'; open: boolean };
 
-  const sections = document.structure?.sections || [];
+function reducer(state: EditorState, action: EditorAction): EditorState {
+  switch (action.type) {
+    case 'initialize_selection':
+      return state.selectedBlockId ? state : { ...state, selectedBlockId: action.blockId };
+    case 'select_block':
+      return { ...state, selectedBlockId: action.blockId };
+    case 'toggle_clause_picker':
+      return { ...state, clausePickerOpen: action.open };
+    default:
+      return state;
+  }
+}
+
+function getFirstBlockId(document: any) {
+  const sections = document?.structure?.sections || [];
+  for (const section of sections) {
+    if (section?.blocks?.[0]?.id) {
+      return String(section.blocks[0].id);
+    }
+  }
+  return '';
+}
+
+function updateDocumentBlock(document: any, blockId: string, updater: (block: any) => any) {
+  const sections = document?.structure?.sections || [];
+
+  let updated = false;
+  const nextSections = sections.map((section: any) => {
+    const index = (section.blocks || []).findIndex((block: any) => String(block.id) === blockId);
+    if (index === -1) return section;
+
+    const nextBlocks = [...section.blocks];
+    nextBlocks[index] = updater(nextBlocks[index]);
+    updated = true;
+    return { ...section, blocks: nextBlocks };
+  });
+
+  if (!updated) return document;
+  return { ...document, structure: { ...document.structure, sections: nextSections } };
+}
+
+export default function EditorPage({ clauses }: EditorPageProps) {
+  const { documentId } = useParams();
+  const { document, setDocument, loading, error, saveState, saveDocumentDebounced } = useDocument(documentId);
+  const [state, dispatch] = useReducer(reducer, { selectedBlockId: '', clausePickerOpen: false });
+
+  const clauseMap = useMemo(() => new Map((clauses || []).map((clause) => [String(clause.id), clause])), [clauses]);
+  const sections = document?.structure?.sections || [];
+
+  useEffect(() => {
+    const firstBlockId = getFirstBlockId(document);
+    if (firstBlockId) {
+      dispatch({ type: 'initialize_selection', blockId: firstBlockId });
+    }
+  }, [document?.id]);
+
+  const selectedBlock = useMemo(() => {
+    for (const section of sections) {
+      for (const block of section.blocks || []) {
+        if (String(block.id) === state.selectedBlockId) {
+          return block;
+        }
+      }
+    }
+    return null;
+  }, [sections, state.selectedBlockId]);
+
+  const updateSelectedBlock = (updater: (block: any) => any) => {
+    if (!document || !state.selectedBlockId) return;
+    const nextDocument = updateDocumentBlock(document, state.selectedBlockId, updater);
+    setDocument(nextDocument);
+    saveDocumentDebounced();
+  };
+
+  if (loading) {
+    return <AppShell><section className="panel"><p>Loading editor…</p></section></AppShell>;
+  }
+
+  if (error || !document) {
+    return <AppShell><section className="panel error-panel"><p>{error || 'Document not found'}</p><Link to="/"><button className="ghost">Back</button></Link></section></AppShell>;
+  }
 
   return (
-    <main className="shell">
-      <header className="topbar panel">
-        <div><h1>{document.title}</h1><p>{saveState}</p></div>
-        <div className="row">
-          <Link to="/dashboard"><button className="ghost">Dashboard</button></Link>
-          <button onClick={() => saveDocumentDebounced({ immediate: true })}>Save now</button>
-        </div>
-      </header>
-
+    <AppShell
+      header={(
+        <header className="topbar panel">
+          <div>
+            <h1>{document.title}</h1>
+            <p>{saveState}</p>
+          </div>
+          <div className="row">
+            <Link to="/"><button className="ghost">Dashboard</button></Link>
+            <button onClick={() => saveDocumentDebounced({ immediate: true })}>Save now</button>
+          </div>
+        </header>
+      )}
+    >
       <section className="editor-layout-3pane">
         <aside className="panel toc-panel">
           <h2>Sections</h2>
@@ -35,35 +124,45 @@ export default function EditorPage({ clauses }: { clauses: any[] }) {
             {sections.map((section: any) => (
               <div className="section-item" key={section.id}>{section.title}</div>
             ))}
-            {sections.length === 0 && <p className="muted">No sections.</p>}
+            {sections.length === 0 ? <p className="muted">No sections.</p> : null}
           </div>
         </aside>
 
-        <section className="panel preview-panel">
-          <h2>Rendered document</h2>
-          <div className="preview-scroll-container">
-            {sections.map((section: any) => (
-              <article className="preview-section" key={section.id}>
-                <div className="preview-section-header"><h3>{section.title}</h3></div>
-                {(section.blocks || []).map((block: any) => {
-                  const raw = getBlockRawBody(block, clauseMap);
-                  return (
-                    <div key={block.id} className="preview-block-item">
-                      <pre>{renderTokenPreview(raw, document.variable_values || {})}</pre>
-                    </div>
-                  );
-                })}
-              </article>
-            ))}
-          </div>
-        </section>
+        <Canvas
+          sections={sections}
+          clauseMap={clauseMap}
+          variableValues={document.variable_values || {}}
+          selectedBlockId={state.selectedBlockId}
+          onSelectBlock={(blockId) => dispatch({ type: 'select_block', blockId })}
+        />
 
-        <aside className="panel inspector-panel">
-          <h2>Document metadata</h2>
-          <p><strong>Project:</strong> {document.project_name || 'N/A'}</p>
-          <p><strong>Sections:</strong> {sections.length}</p>
-        </aside>
+        <Inspector
+          document={document}
+          selectedBlock={selectedBlock}
+          clauseMap={clauseMap}
+          onSelectedBodyChange={(body) => {
+            updateSelectedBlock((block) => (
+              block.type === 'clause_ref'
+                ? { ...block, overrides: { ...(block.overrides || {}), body } }
+                : { ...block, body }
+            ));
+          }}
+          onSelectedLevelChange={(level) => {
+            updateSelectedBlock((block) => ({ ...block, level }));
+          }}
+          onOpenClausePicker={() => dispatch({ type: 'toggle_clause_picker', open: true })}
+        />
       </section>
-    </main>
+
+      <ClausePickerModal
+        clauses={clauses}
+        open={state.clausePickerOpen}
+        onClose={() => dispatch({ type: 'toggle_clause_picker', open: false })}
+        onPickClause={(clauseId) => {
+          updateSelectedBlock((block) => ({ ...block, clause_id: clauseId }));
+          dispatch({ type: 'toggle_clause_picker', open: false });
+        }}
+      />
+    </AppShell>
   );
 }

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createDocument } from '../api';
+import AppShell from '../components/AppShell';
 import { supabase } from '../supabaseClient';
 
 export default function DashboardPage({ session, context, contextError, contextLoading, onContextRefresh }: {
@@ -29,12 +30,17 @@ export default function DashboardPage({ session, context, contextError, contextL
   }, [context.documents, activeWorkspaceId, selectedProject]);
 
   return (
-    <main className="shell">
-      <header className="topbar"><div><h1>Spec Writer</h1><p>Dashboard · {session?.user?.email || ''}</p></div><button className="ghost" onClick={() => void supabase?.auth.signOut()}>Sign out</button></header>
-
+    <AppShell
+      header={(
+        <header className="topbar">
+          <div><h1>Spec Writer</h1><p>Dashboard · {session?.user?.email || ''}</p></div>
+          <button className="ghost" onClick={() => void supabase?.auth.signOut()}>Sign out</button>
+        </header>
+      )}
+    >
       <section className="panel">
         <h2>Workspace & project</h2>
-        {contextError && <p className="error">{contextError}</p>}
+        {contextError ? <p className="error">{contextError}</p> : null}
         <div className="builder-controls">
           <label>Workspace</label>
           <select value={activeWorkspaceId} onChange={(e) => setSelectedWorkspaceId(e.target.value)}>
@@ -51,7 +57,7 @@ export default function DashboardPage({ session, context, contextError, contextL
 
       <section className="panel">
         <h2>Create document</h2>
-        {createError && <p className="error">{createError}</p>}
+        {createError ? <p className="error">{createError}</p> : null}
         <form className="builder-controls" onSubmit={async (e) => {
           e.preventDefault();
           setCreateError('');
@@ -75,7 +81,7 @@ export default function DashboardPage({ session, context, contextError, contextL
 
       <section className="panel">
         <h2>Documents</h2>
-        {contextLoading && <p>Loading data…</p>}
+        {contextLoading ? <p>Loading data…</p> : null}
         {filteredDocuments.length === 0 ? <p className="muted">No documents found for this selection.</p> : null}
         <div className="doc-list">
           {filteredDocuments.map((doc: any) => (
@@ -86,6 +92,6 @@ export default function DashboardPage({ session, context, contextError, contextL
           ))}
         </div>
       </section>
-    </main>
+    </AppShell>
   );
 }
