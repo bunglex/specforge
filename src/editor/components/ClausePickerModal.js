@@ -1,7 +1,7 @@
 import { getBlockRawBody } from '../model';
-import { escapeHtml } from './utils';
+import { escapeHtml, renderTokens } from './utils';
 
-export function renderClausePickerModal({ open, clauses, taxonomy, tags, editorFilters }) {
+export function renderClausePickerModal({ open, clauses, taxonomy, tags, editorFilters, variableValues }) {
   if (!open) {
     return '';
   }
@@ -27,14 +27,17 @@ export function renderClausePickerModal({ open, clauses, taxonomy, tags, editorF
         <div class="clause-list">
           ${clauses.length === 0 ? '<p class="muted">No clauses found.</p>' : ''}
           ${clauses
-            .map((clause) => `
-              <article>
-                <h3>${escapeHtml(clause.title)}</h3>
-                <p class="muted">Tags: ${(clause.tags || []).map(escapeHtml).join(', ') || 'none'}</p>
-                <p>${escapeHtml(getBlockRawBody({ type: 'clause_ref', clause_id: clause.id, level: 'standard', overrides: {} }, new Map([[String(clause.id), clause]])))}</p>
-                <button data-insert-clause="${clause.id}">Insert</button>
-              </article>
-            `)
+            .map((clause) => {
+              const raw = getBlockRawBody({ type: 'clause_ref', clause_id: clause.id, level: 'standard', overrides: {} }, new Map([[String(clause.id), clause]]));
+              return `
+                <article>
+                  <h3>${escapeHtml(clause.title)}</h3>
+                  <p class="muted">Tags: ${(clause.tags || []).map(escapeHtml).join(', ') || 'none'}</p>
+                  <p class="token-preview">${renderTokens(raw, variableValues || {})}</p>
+                  <button data-insert-clause="${clause.id}">Insert</button>
+                </article>
+              `;
+            })
             .join('')}
         </div>
       </div>

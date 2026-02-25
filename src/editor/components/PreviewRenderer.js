@@ -1,13 +1,5 @@
-import { getBlockRawBody, resolveVariables } from '../model';
-import { escapeHtml } from './utils';
-
-function renderTemplateWithVariableMarkup(rawBody) {
-  return escapeHtml(rawBody || '').replaceAll(/\{\{\s*([a-zA-Z0-9_\-.]+)\s*\}\}/g, '<span class="var-token">{{$1}}</span>');
-}
-
-function renderResolvedWithVariableMarkup(resolvedBody) {
-  return escapeHtml(resolvedBody || '').replaceAll(/⟪missing:([a-zA-Z0-9_\-.]+)⟫/g, '<span class="var-token missing">⟪missing:$1⟫</span>');
-}
+import { getBlockRawBody } from '../model';
+import { escapeHtml, renderTokens } from './utils';
 
 export function renderPreviewRenderer({ document, sections, selectedBlock }) {
   const clauseMap = new Map(((document?._workspaceClauses) || []).map((clause) => [String(clause.id), clause]));
@@ -29,13 +21,11 @@ export function renderPreviewRenderer({ document, sections, selectedBlock }) {
               .map((block) => {
                 const isSelected = selectedBlock?.id === block.id;
                 const rawBody = getBlockRawBody(block, clauseMap);
-                const resolvedBody = resolveVariables(rawBody, values).text;
                 const clause = block.type === 'clause_ref' ? clauseMap.get(String(block.clause_id)) : null;
                 return `
                   <div class="preview-block-item ${isSelected ? 'selected' : ''} ${block.include === false ? 'excluded' : ''}" data-block-id="${block.id}" data-section-id="${section.id}">
                     <div class="preview-block-meta">${block.type === 'clause_ref' ? `Clause · ${escapeHtml(clause?.title || 'Unknown clause')}` : 'Text block'} ${block.locked ? '· Locked' : ''} ${block.include === false ? '· Excluded' : ''}</div>
-                    <pre class="template-body">${renderTemplateWithVariableMarkup(rawBody)}</pre>
-                    <pre>${renderResolvedWithVariableMarkup(resolvedBody)}</pre>
+                    <pre>${renderTokens(rawBody, values)}</pre>
                   </div>
                 `;
               })
