@@ -14,7 +14,16 @@ body {
   color: #111827;
 }
 
-.shell { width: 100%; height: 100vh; margin: 0 auto; display: grid; gap: 0.7rem; padding: 0.8rem; }
+.shell {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0 auto;
+  display: grid;
+  grid-auto-rows: min-content;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 0.8rem;
+}
 h1,h2,h3,p { margin: 0; }
 .topbar { display:flex; justify-content:space-between; align-items:center; gap:0.75rem; }
 .panel {
