@@ -1,6 +1,7 @@
 import { BLOCK_LEVELS, extractVariablesFromDocument } from '../editor/model';
 
 type InspectorProps = {
+  className?: string;
   document: any;
   selectedBlock: any;
   clauseMap: Map<string, any>;
@@ -10,6 +11,7 @@ type InspectorProps = {
 };
 
 export default function Inspector({
+  className,
   document,
   selectedBlock,
   clauseMap,
@@ -20,7 +22,8 @@ export default function Inspector({
   const variableKeys = extractVariablesFromDocument(document, clauseMap);
 
   return (
-    <aside className="panel inspector-panel">
+    <aside className={`panel inspector-panel ${className || ''}`.trim()}>
+      <div className="window-titlebar">Edit panel</div>
       <h2>Inspector</h2>
       {!selectedBlock ? <p className="muted">Select a block to edit.</p> : null}
       {selectedBlock ? (
