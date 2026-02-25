@@ -7,12 +7,13 @@ type CanvasProps = {
   variableValues: Record<string, string>;
   selectedBlockId: string;
   onSelectBlock: (blockId: string) => void;
+  compact?: boolean;
 };
 
-function CanvasComponent({ sections, clauseMap, variableValues, selectedBlockId, onSelectBlock }: CanvasProps) {
+function CanvasComponent({ sections, clauseMap, variableValues, selectedBlockId, onSelectBlock, compact = false }: CanvasProps) {
   return (
-    <section className="panel preview-panel">
-      <h2>Rendered document</h2>
+    <section className={`panel preview-panel${compact ? ' preview-panel-compact' : ''}`}>
+      {!compact ? <h2>Rendered document</h2> : null}
       <div className="preview-scroll-container">
         {sections.map((section) => (
           <article className="preview-section" key={section.id}>

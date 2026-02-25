@@ -302,16 +302,9 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     setHelpMessage('All windows shown.');
   };
 
-  const toggleDocked = (key: DesktopWindowKey) => {
-    setDesktopWindows((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        docked: !prev[key].docked,
-        dockSlot: prev[key].dockSlot || DEFAULT_WINDOWS[key].dockSlot
-      }
-    }));
-    bringToFront(key);
+  const closeWindow = (key: DesktopWindowKey) => {
+    setWindowVisibility(key, false);
+    setHelpMessage(`${key} window closed. Use View → Windows to show it again.`);
   };
 
   const getWindowStyle = (key: DesktopWindowKey) => {
@@ -447,7 +440,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               <button type="button" className="menu-trigger" onClick={() => { setOpenCascade(null); setOpenMenu((value) => (value === 'help' ? null : 'help')); }}>Help</button>
               {openMenu === 'help' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="menu-item" onClick={() => { setHelpMessage('Drag a title bar to left/centre/right thirds to dock. Use View → Windows to show/hide panes.'); setOpenMenu(null); }}>Window controls</button>
+                  <button type="button" className="menu-item" onClick={() => { setHelpMessage('Drag a window to the left, right, or top edge to dock. Drag away from edge to float. Use View → Windows to show/hide panes.'); setOpenMenu(null); }}>Window controls</button>
                   <button type="button" className="menu-item" onClick={() => { setHelpMessage('Spec Writer desktop workspace using standard desktop dock + cascade menu patterns.'); setOpenMenu(null); }}>About</button>
                 </div>
               ) : null}
@@ -490,8 +483,14 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               }}
             >
               <span>Library browser</span>
-              <button type="button" className="ghost" onClick={() => toggleDocked('library')}>
-                {desktopWindows.library.docked ? 'Undock' : 'Dock'}
+              <button
+                type="button"
+                className="window-close"
+                aria-label="Close library browser"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => closeWindow('library')}
+              >
+                ×
               </button>
             </div>
             <div className="left-tabs">
@@ -535,8 +534,14 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               }}
             >
               <span>Document browser</span>
-              <button type="button" className="ghost" onClick={() => toggleDocked('browser')}>
-                {desktopWindows.browser.docked ? 'Undock' : 'Dock'}
+              <button
+                type="button"
+                className="window-close"
+                aria-label="Close document browser"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => closeWindow('browser')}
+              >
+                ×
               </button>
             </div>
             <Canvas
@@ -545,6 +550,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               variableValues={document.variable_values || {}}
               selectedBlockId={state.selectedBlockId}
               onSelectBlock={(blockId) => dispatch({ type: 'select_block', blockId })}
+              compact
             />
           </section>
         ) : null}
@@ -564,8 +570,14 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               }}
             >
               <span>Properties</span>
-              <button type="button" className="ghost" onClick={() => toggleDocked('properties')}>
-                {desktopWindows.properties.docked ? 'Undock' : 'Dock'}
+              <button
+                type="button"
+                className="window-close"
+                aria-label="Close properties"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => closeWindow('properties')}
+              >
+                ×
               </button>
             </div>
             <Inspector
