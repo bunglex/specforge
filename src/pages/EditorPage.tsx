@@ -112,6 +112,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [highestZ, setHighestZ] = useState(3);
   const [openMenu, setOpenMenu] = useState<'file' | 'edit' | 'view' | 'help' | null>(null);
+  const [openCascade, setOpenCascade] = useState<'view-windows' | null>(null);
   const [helpMessage, setHelpMessage] = useState('Tip: use View → Reset layout if windows overlap.');
   const menuRef = useRef<HTMLDivElement | null>(null);
   const desktopRef = useRef<HTMLElement | null>(null);
@@ -211,6 +212,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     const closeMenus = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
         setOpenMenu(null);
+        setOpenCascade(null);
       }
     };
     window.addEventListener('mousedown', closeMenus);
@@ -306,12 +308,19 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     }
 
     if (state.dockSlot === 'left') {
-      return { left: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
+      return { left: 12, top: 12, bottom: 12, width: 'clamp(260px, 22%, 320px)', zIndex: state.z };
     }
     if (state.dockSlot === 'center') {
-      return { left: 'calc(24% + 18px)', top: 12, bottom: 12, width: 'calc(52% - 18px)', minWidth: 340, zIndex: state.z };
+      return {
+        left: 'calc(clamp(260px, 22%, 320px) + 20px)',
+        top: 12,
+        bottom: 12,
+        right: 'calc(clamp(280px, 24%, 360px) + 20px)',
+        minWidth: 340,
+        zIndex: state.z
+      };
     }
-    return { right: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
+    return { right: 12, top: 12, bottom: 12, width: 'clamp(280px, 24%, 360px)', zIndex: state.z };
   };
 
   const handleTreeSelection = (node: TreeNodeItem) => {
@@ -376,44 +385,57 @@ export default function EditorPage({ clauses }: EditorPageProps) {
 
           <div className="panel windows-menubar" ref={menuRef}>
             <div className="menu-root">
-              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'file' ? null : 'file'))}>File</button>
+              <button type="button" className="menu-trigger" onClick={() => { setOpenCascade(null); setOpenMenu((value) => (value === 'file' ? null : 'file')); }}>File</button>
               {openMenu === 'file' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="ghost" onClick={() => { saveDocumentDebounced({ immediate: true }); setOpenMenu(null); }}>Save</button>
-                  <Link to="/"><button type="button" className="ghost">Exit to dashboard</button></Link>
+                  <button type="button" className="menu-item" onClick={() => { saveDocumentDebounced({ immediate: true }); setOpenMenu(null); }}>Save</button>
+                  <Link to="/"><button type="button" className="menu-item">Exit to dashboard</button></Link>
                 </div>
               ) : null}
             </div>
 
             <div className="menu-root">
-              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'edit' ? null : 'edit'))}>Edit</button>
+              <button type="button" className="menu-trigger" onClick={() => { setOpenCascade(null); setOpenMenu((value) => (value === 'edit' ? null : 'edit')); }}>Edit</button>
               {openMenu === 'edit' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="ghost" onClick={() => { dispatch({ type: 'toggle_clause_picker', open: true }); setOpenMenu(null); }}>Change clause in selected block</button>
+                  <button type="button" className="menu-item" onClick={() => { dispatch({ type: 'toggle_clause_picker', open: true }); setOpenMenu(null); }}>Change clause in selected block</button>
                 </div>
               ) : null}
             </div>
 
             <div className="menu-root">
-              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'view' ? null : 'view'))}>View</button>
+              <button type="button" className="menu-trigger" onClick={() => setOpenMenu((value) => (value === 'view' ? null : 'view'))}>View</button>
               {openMenu === 'view' ? (
                 <div className="menu-dropdown">
-                  {(['library', 'browser', 'properties'] as DesktopWindowKey[]).map((key) => (
-                    <button key={key} type="button" className="ghost" onClick={() => setWindowVisibility(key, !desktopWindows[key].visible)}>
-                      {desktopWindows[key].visible ? 'Hide' : 'Show'} {key}
+                  <div
+                    className="menu-cascade"
+                    onMouseEnter={() => setOpenCascade('view-windows')}
+                    onMouseLeave={() => setOpenCascade((value) => (value === 'view-windows' ? null : value))}
+                  >
+                    <button type="button" className="menu-item menu-item-cascade" onClick={() => setOpenCascade((value) => (value === 'view-windows' ? null : 'view-windows'))}>
+                      Windows ▸
                     </button>
-                  ))}
-                  <button type="button" className="ghost" onClick={() => { resetLayout(); setOpenMenu(null); }}>Reset layout</button>
+                    {openCascade === 'view-windows' ? (
+                      <div className="menu-dropdown menu-dropdown-cascade">
+                        {(['library', 'browser', 'properties'] as DesktopWindowKey[]).map((key) => (
+                          <button key={key} type="button" className="menu-item" onClick={() => setWindowVisibility(key, !desktopWindows[key].visible)}>
+                            {desktopWindows[key].visible ? '✓' : ''} {key}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <button type="button" className="menu-item" onClick={() => { resetLayout(); setOpenMenu(null); setOpenCascade(null); }}>Reset layout</button>
                 </div>
               ) : null}
             </div>
 
             <div className="menu-root">
-              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'help' ? null : 'help'))}>Help</button>
+              <button type="button" className="menu-trigger" onClick={() => { setOpenCascade(null); setOpenMenu((value) => (value === 'help' ? null : 'help')); }}>Help</button>
               {openMenu === 'help' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag a title bar to the left/right edge to snap dock, or top edge to center dock.'); setOpenMenu(null); }}>Window controls</button>
-                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Spec Writer desktop prototype inspired by classic Windows UI patterns.'); setOpenMenu(null); }}>About</button>
+                  <button type="button" className="menu-item" onClick={() => { setHelpMessage('Drag a title bar to left/centre/right thirds to dock. Use View → Windows to show/hide panes.'); setOpenMenu(null); }}>Window controls</button>
+                  <button type="button" className="menu-item" onClick={() => { setHelpMessage('Spec Writer desktop workspace using standard desktop dock + cascade menu patterns.'); setOpenMenu(null); }}>About</button>
                 </div>
               ) : null}
             </div>
