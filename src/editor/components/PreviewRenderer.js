@@ -1,13 +1,17 @@
-import { getRenderedBlockBody } from '../model';
+import { getBlockRawBody, getRenderedBlockBody } from '../model';
 import { escapeHtml } from './utils';
 
+function renderTemplateWithVariableMarkup(rawBody) {
+  return escapeHtml(rawBody || '').replaceAll(/\{\{\s*([a-zA-Z0-9_\-.]+)\s*\}\}/g, '<span class="var-token">{{$1}}</span>');
+}
+
 export function renderPreviewRenderer({ document, sections, selectedBlock }) {
-  const clauseMap = new Map((document._workspaceClauses || []).map((clause) => [String(clause.id), clause]));
-  const values = document.variable_values || {};
+  const clauseMap = new Map(((document?._workspaceClauses) || []).map((clause) => [String(clause.id), clause]));
+  const values = document?.variable_values || {};
 
   return `
     <div class="content-header">
-      <h2>Preview</h2>
+      <h2>Spec Canvas</h2>
       <button class="ghost" id="open-clause-modal">Insert Clause</button>
     </div>
     <div id="preview-scroll-container" class="preview-scroll-container">
@@ -20,12 +24,14 @@ export function renderPreviewRenderer({ document, sections, selectedBlock }) {
             ${(section.blocks || [])
               .map((block) => {
                 const isSelected = selectedBlock?.id === block.id;
-                const body = escapeHtml(getRenderedBlockBody(block, clauseMap, values));
+                const rawBody = getBlockRawBody(block, clauseMap);
+                const resolvedBody = escapeHtml(getRenderedBlockBody(block, clauseMap, values));
                 const clause = block.type === 'clause_ref' ? clauseMap.get(String(block.clause_id)) : null;
                 return `
-                  <div class="preview-block-item ${isSelected ? 'selected' : ''}" data-block-id="${block.id}" data-section-id="${section.id}">
-                    <div class="preview-block-meta">${block.type === 'clause_ref' ? `Clause · ${escapeHtml(clause?.title || 'Unknown clause')}` : 'Text block'}</div>
-                    <pre>${body}</pre>
+                  <div class="preview-block-item ${isSelected ? 'selected' : ''} ${block.include === false ? 'excluded' : ''}" data-block-id="${block.id}" data-section-id="${section.id}">
+                    <div class="preview-block-meta">${block.type === 'clause_ref' ? `Clause · ${escapeHtml(clause?.title || 'Unknown clause')}` : 'Text block'} ${block.locked ? '· Locked' : ''} ${block.include === false ? '· Excluded' : ''}</div>
+                    <pre class="template-body">${renderTemplateWithVariableMarkup(rawBody)}</pre>
+                    <pre>${resolvedBody}</pre>
                   </div>
                 `;
               })

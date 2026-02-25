@@ -1,4 +1,9 @@
-export const BLOCK_LEVELS = ['outline', 'standard', 'detailed'];
+export const BLOCK_LEVELS = ['basic', 'standard', 'robust'];
+
+const LEGACY_LEVEL_MAP = {
+  outline: 'basic',
+  detailed: 'robust'
+};
 
 export function normalizeDocumentStructure(document) {
   const sections = Array.isArray(document?.structure?.sections) ? document.structure.sections : [];
@@ -12,9 +17,9 @@ export function normalizeDocumentStructure(document) {
       blocks = safeSection.blocks.map(normalizeBlock).filter(Boolean);
     } else if (typeof safeSection.content === 'string') {
       migrated = true;
-      blocks = [{ id: crypto.randomUUID(), type: 'text', body: safeSection.content }];
+      blocks = [{ id: crypto.randomUUID(), type: 'text', body: safeSection.content, include: true, locked: false, tags: [] }];
     } else {
-      blocks = [{ id: crypto.randomUUID(), type: 'text', body: '' }];
+      blocks = [{ id: crypto.randomUUID(), type: 'text', body: '', include: true, locked: false, tags: [] }];
       migrated = true;
     }
 
@@ -44,16 +49,23 @@ export function normalizeBlock(block) {
     return {
       id: block.id || crypto.randomUUID(),
       type: 'text',
-      body: typeof block.body === 'string' ? block.body : ''
+      body: typeof block.body === 'string' ? block.body : '',
+      include: block.include !== false,
+      locked: Boolean(block.locked),
+      tags: Array.isArray(block.tags) ? block.tags : []
     };
   }
 
   if (block.type === 'clause_ref') {
+    const mappedLevel = LEGACY_LEVEL_MAP[block.level] || block.level;
     return {
       id: block.id || crypto.randomUUID(),
       type: 'clause_ref',
       clause_id: block.clause_id || '',
-      level: BLOCK_LEVELS.includes(block.level) ? block.level : 'standard',
+      level: BLOCK_LEVELS.includes(mappedLevel) ? mappedLevel : 'standard',
+      include: block.include !== false,
+      locked: Boolean(block.locked),
+      tags: Array.isArray(block.tags) ? block.tags : [],
       overrides: {
         body: block?.overrides?.body || ''
       }
@@ -64,11 +76,11 @@ export function normalizeBlock(block) {
 }
 
 export function createTextBlock(body = '') {
-  return { id: crypto.randomUUID(), type: 'text', body };
+  return { id: crypto.randomUUID(), type: 'text', body, include: true, locked: false, tags: [] };
 }
 
 export function createClauseRefBlock(clauseId, level = 'standard') {
-  return { id: crypto.randomUUID(), type: 'clause_ref', clause_id: clauseId, level, overrides: {} };
+  return { id: crypto.randomUUID(), type: 'clause_ref', clause_id: clauseId, level, include: true, locked: false, tags: [], overrides: {} };
 }
 
 export function getClauseBodyForLevel(clause, level) {
@@ -97,7 +109,7 @@ export function getBlockRawBody(block, clauseMap) {
     if (overrideBody) {
       return overrideBody;
     }
-    return getClauseBodyForLevel(clauseMap.get(block.clause_id), block.level);
+    return getClauseBodyForLevel(clauseMap.get(String(block.clause_id)), block.level);
   }
   return '';
 }

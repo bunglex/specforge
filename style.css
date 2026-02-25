@@ -77,3 +77,16 @@ button.ghost { background: rgba(30, 41, 59, 1); border: 1px solid rgba(148, 163,
   .builder-controls { grid-template-columns: 1fr; }
   .clause-filters { grid-template-columns: 1fr; }
 }
+
+
+.tree-node { border:1px solid rgba(148,163,184,0.2); border-radius:8px; padding:0.4rem 0.5rem; }
+.tree-node summary { cursor:pointer; }
+.tree-children { display:grid; gap:0.35rem; margin-top:0.5rem; }
+.preview-block-item.excluded { opacity:0.6; border-style:dashed; }
+.template-body { background: rgba(15,23,42,0.8); }
+.var-token { color:#22d3ee; font-weight:600; }
+.flash-highlight { animation: flashSection 1.2s ease; }
+@keyframes flashSection {
+  0% { outline: 2px solid rgba(56,189,248,0.9); }
+  100% { outline: 2px solid transparent; }
+}
