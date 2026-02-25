@@ -1,4 +1,4 @@
-# Spec Writer Local Setup
+# SpecForge / Spec Writer Local Setup
 
 ## 1) Install and run
 
@@ -7,70 +7,50 @@ npm install
 npm run dev
 ```
 
-Vite starts the app locally (typically at http://localhost:5173).
+Vite starts locally (usually `http://localhost:5173`).
 
-## 2) Environment variables
+## 2) Environment variables (`.env.local`)
 
-Create a `.env.local` file in the repository root:
+Create `.env.local` at repo root:
 
 ```bash
 VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your-anon-key>
 ```
 
-Notes:
-- `.env.local` is ignored by git and should never be committed.
-- `VITE_` prefix is required for browser exposure in Vite.
-
-## 3) Apply schema + seed (self-hosted or SQL editor workflow)
+## 3) Apply Supabase schema + seed
 
 Run SQL in this order:
 1. `supabase/schema.sql`
 2. `supabase/seed.sql`
 
-Before running the seed script, replace `YOUR_AUTH_USER_ID_HERE` with your actual Auth user UUID so your account is attached to the demo workspace.
+Before seeding, replace `YOUR_AUTH_USER_ID_HERE` with your Auth user UUID.
 
-## 4) Document structure format (block-based)
+The app expects these existing tables and works with them directly:
+- `workspaces`
+- `workspace_members`
+- `taxonomy`
+- `tags`
+- `clause_library`
+- `documents`
+- `modules`
 
-`documents.structure` now stores sections with a block list:
+## 4) Editor interaction model
 
-```json
-{
-  "sections": [
-    {
-      "id": "uuid",
-      "title": "Introduction",
-      "blocks": [
-        { "id": "uuid", "type": "text", "body": "Plain text block" },
-        {
-          "id": "uuid",
-          "type": "clause_ref",
-          "clause_id": "uuid",
-          "level": "standard",
-          "overrides": { "body": "Optional override text" }
-        }
-      ]
-    }
-  ]
-}
-```
+The app uses a 3-pane shell:
+- **Left sidebar**: section contents + taxonomy tree + clause quick insert/search.
+- **Middle canvas**: section/block rendering with variable-token highlight + resolved preview.
+- **Right inspector**: block edit panel (version `basic|standard|robust`, tags, lock/include toggles, variable insert/create).
 
-Legacy section payloads with `content` are automatically converted on first document open and then saved back.
+Behavior highlights:
+- Clicking a section in contents smoothly scrolls and briefly highlights that section.
+- Clicking a block opens the inspector.
+- **Insert Clause** opens a searchable picker with taxonomy/tag filters.
+- Variables (`{{variable_name}}`) are reusable and stored per-document in `documents.variable_values`.
 
-## 5) New editor interactions
+## 5) Common errors and fixes
 
-The editor route is now a 3-pane interface:
-- **Left (TOC):** section list + search.
-- **Middle (Preview):** scrollable rendered section/block preview with anchors.
-- **Right (Inspector):** block editor (text/clause settings + variable values).
-
-Inspector and insertion notes:
-- `text` blocks support direct textarea editing with live preview updates.
-- `clause_ref` blocks support detail level changes (`outline|standard|detailed`) and optional body overrides.
-- Use **Insert Clause** in Preview or Inspector to open the clause picker with title/body search + taxonomy/tag filters.
-
-Shortcuts:
-- `Esc`: close the inspector (clear selected block).
-- `Ctrl+S` / `Cmd+S`: force immediate save.
-
-Autosave runs with a ~900ms debounce and shows **Saved / Unsaved** status in the header.
+- **Missing `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY`**: set `.env.local` and restart `npm run dev`.
+- **No workspaces visible after login**: verify `workspace_members` contains your `auth.users.id` for a workspace.
+- **Seed fails on UUID cast**: replace `YOUR_AUTH_USER_ID_HERE` before running `supabase/seed.sql`.
+- **Editor/document load failures**: confirm RLS policies from `supabase/schema.sql` are applied and your user is a workspace member.

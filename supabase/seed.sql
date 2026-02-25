@@ -65,7 +65,8 @@ rows_to_insert as (
     v.title,
     v.body,
     (select ft.id from first_taxonomy ft where ft.name = v.taxonomy_name limit 1) as taxonomy_id,
-    v.tags::text[] as tags
+    v.tags::text[] as tags,
+    v.metadata::jsonb as metadata
   from target_workspace tw
   cross join (
     values
@@ -73,24 +74,27 @@ rows_to_insert as (
         'Statement of Objectives',
         'This document captures the objectives for {{client_name}} and aligns delivery with {{target_outcome}}.',
         'Commercial',
-        '{delivery}'
+        '{delivery}',
+        '{"variants": {"basic": "Objectives for {{client_name}} supporting {{target_outcome}}.", "standard": "This document captures the objectives for {{client_name}} and aligns delivery with {{target_outcome}}.", "robust": "This document captures strategic and operational objectives for {{client_name}}, aligns execution to {{target_outcome}}, and defines measurable success criteria."}}'
       ),
       (
         'Scope Clarification',
         'In-scope items: {{scope_in}}. Out-of-scope items: {{scope_out}}.',
         'Implementation',
-        '{compliance,delivery}'
+        '{compliance,delivery}',
+        '{"variants": {"basic": "Scope in: {{scope_in}}. Scope out: {{scope_out}}.", "standard": "In-scope items: {{scope_in}}. Out-of-scope items: {{scope_out}}.", "robust": "The implementation scope includes {{scope_in}} and explicitly excludes {{scope_out}}, with dependencies and assumptions to be validated during planning."}}'
       ),
       (
         'Risk and Mitigation',
         'Known risks include {{risk_summary}}. Planned mitigations: {{mitigation_plan}}.',
         'Risk',
-        '{security,compliance}'
+        '{security,compliance}',
+        '{"variants": {"basic": "Risks: {{risk_summary}}. Mitigation: {{mitigation_plan}}.", "standard": "Known risks include {{risk_summary}}. Planned mitigations: {{mitigation_plan}}.", "robust": "Known risks include {{risk_summary}} with mitigations defined as {{mitigation_plan}}, plus owners, escalation thresholds, and review cadence."}}'
       )
-  ) as v(title, body, taxonomy_name, tags)
+  ) as v(title, body, taxonomy_name, tags, metadata)
 )
-insert into public.clause_library (workspace_id, taxonomy_id, title, body, tags)
-select workspace_id, taxonomy_id, title, body, tags
+insert into public.clause_library (workspace_id, taxonomy_id, title, body, tags, metadata)
+select workspace_id, taxonomy_id, title, body, tags, metadata
 from rows_to_insert r
 where not exists (
   select 1
