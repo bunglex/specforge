@@ -1,10 +1,11 @@
-import { BLOCK_LEVELS } from '../model';
-import { escapeHtml } from './utils';
+import { BLOCK_LEVELS, getBlockRawBody } from '../model';
+import { escapeHtml, renderTokens } from './utils';
 
 export function renderInspector({ document, selectedBlock, saveStateLabel, allVariables }) {
   const clauseMap = new Map(((document?._workspaceClauses) || []).map((clause) => [String(clause.id), clause]));
   const selectedClause = selectedBlock?.type === 'clause_ref' ? clauseMap.get(String(selectedBlock.clause_id)) : null;
   const values = document?.variable_values || {};
+  const selectedBody = selectedBlock ? getBlockRawBody(selectedBlock, clauseMap) : '';
 
   return `
     <div class="content-header">
@@ -45,6 +46,8 @@ export function renderInspector({ document, selectedBlock, saveStateLabel, allVa
     ` : ''}
 
     ${selectedBlock ? `
+      <label>Rendered preview</label>
+      <pre class="token-preview" id="inspector-token-preview">${renderTokens(selectedBody, values)}</pre>
       <h3>Variables</h3>
       <label>Insert existing variable</label>
       <div class="row">

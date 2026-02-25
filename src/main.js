@@ -6,9 +6,11 @@ import {
   createClauseRefBlock,
   createTextBlock,
   extractVariablesFromDocument,
-  normalizeDocumentStructure
+  normalizeDocumentStructure,
+  getBlockRawBody
 } from './editor/model';
 import { renderClausePickerModal, renderEditorLayout, renderVariableInputs } from './editor/components';
+import { renderTokens } from './editor/components/utils';
 
 const app = document.querySelector('#app');
 
@@ -47,9 +49,11 @@ const initialState = {
     renderTimer: null,
     saveInFlight: null,
     pendingSave: false,
+    pendingForceSave: false,
     lastSavedFingerprint: '',
-    isSaving: false,
-    saveError: ''
+    saveStatus: 'idle',
+    saveError: '',
+    lastSavedAt: ''
   }
 };
 
@@ -203,6 +207,23 @@ function scheduleEditorRender(delay = 120) {
   }, delay);
 }
 
+function updateSaveState(status, errorMessage = '') {
+  state.editor.saveStatus = status;
+  state.editor.saveError = errorMessage;
+  if (status === 'dirty') {
+    state.saveState = 'Unsaved changes';
+  } else if (status === 'saving') {
+    state.saveState = 'Saving...';
+  } else if (status === 'saved') {
+    state.editor.lastSavedAt = new Date().toLocaleTimeString();
+    state.saveState = `Saved at ${state.editor.lastSavedAt}`;
+  } else if (status === 'error') {
+    state.saveState = `Failed to save: ${errorMessage}`;
+  } else {
+    state.saveState = state.editor.lastSavedAt ? `Saved at ${state.editor.lastSavedAt}` : 'Saved';
+  }
+}
+
 function markEditorDirty() {
   if (!state.editor.document) {
     return;
@@ -210,56 +231,47 @@ function markEditorDirty() {
   const fingerprint = getDocumentFingerprint(state.editor.document);
   if (fingerprint === state.editor.lastSavedFingerprint) {
     state.editor.dirty = false;
-    state.saveState = state.saveState.startsWith('Failed to save:') ? state.saveState : `Saved at ${new Date().toLocaleTimeString()}`;
+    updateSaveState('saved');
     return;
   }
 
   state.editor.dirty = true;
-  state.saveState = 'Unsaved changes';
+  updateSaveState('dirty');
   scheduleAutosave();
 }
 
-async function saveEditorDocument() {
+async function saveEditorDocument({ force = false } = {}) {
   if (!state.editor.document) {
     return;
   }
 
+  window.clearTimeout(state.editor.autosaveTimer);
   const currentFingerprint = getDocumentFingerprint(state.editor.document);
-  if (!state.editor.dirty || currentFingerprint === state.editor.lastSavedFingerprint) {
+  const needsSave = force || state.editor.dirty || currentFingerprint !== state.editor.lastSavedFingerprint;
+  if (!needsSave) {
     state.editor.dirty = false;
-    state.editor.saveError = '';
-    state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
+    updateSaveState('saved');
     return;
   }
 
   if (state.editor.saveInFlight) {
     state.editor.pendingSave = true;
+    state.editor.pendingForceSave = state.editor.pendingForceSave || force;
     logDebug('Save already in flight, queued next save');
     return state.editor.saveInFlight;
   }
 
-  state.editor.isSaving = true;
-  state.editor.saveError = '';
-  state.saveState = 'Saving...';
+  updateSaveState('saving');
   renderEditorPreservingFocus();
 
   state.editor.saveInFlight = (async () => {
-    let saveError = null;
     try {
-      try {
-        logDebug('Saving document', state.editor.document.id);
-        const savedDocument = await saveDocument(state.editor.document);
-        state.editor.document = savedDocument;
-        state.editor.lastSavedFingerprint = getDocumentFingerprint(savedDocument);
-        state.editor.dirty = false;
-        state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
-        state.editor.saveError = '';
-      } catch (error) {
-        saveError = error;
-        state.saveState = `Failed to save: ${error.message}`;
-        state.editor.saveError = error.message;
-        logDebug('Save failed', error);
-      }
+      logDebug('Saving document', state.editor.document.id);
+      const savedDocument = await saveDocument(state.editor.document);
+      state.editor.document = savedDocument;
+      state.editor.lastSavedFingerprint = getDocumentFingerprint(savedDocument);
+      state.editor.dirty = false;
+      updateSaveState('saved');
 
       try {
         await refreshContext({ silent: true });
@@ -268,26 +280,53 @@ async function saveEditorDocument() {
         logDebug('Refresh after save failed', error);
       }
 
+      return state.editor.document;
+    } catch (error) {
+      updateSaveState('error', error.message);
+      logDebug('Save failed', error);
+      throw error;
+    } finally {
       state.editor.saveInFlight = null;
       const shouldRunQueued = state.editor.pendingSave;
+      const queuedForce = state.editor.pendingForceSave;
       state.editor.pendingSave = false;
+      state.editor.pendingForceSave = false;
 
-      if (shouldRunQueued && state.editor.dirty) {
-        logDebug('Running queued save');
-        return saveEditorDocument();
+      if (shouldRunQueued) {
+        void saveEditorDocument({ force: queuedForce });
       }
 
-      if (saveError) {
-        throw saveError;
-      }
-      return state.editor.document;
-    } finally {
-      state.editor.isSaving = false;
       renderEditorPreservingFocus();
     }
   })();
 
   return state.editor.saveInFlight;
+}
+
+
+function refreshLiveTokenPreviews() {
+  const doc = state.editor.document;
+  if (!doc) {
+    return;
+  }
+  const values = doc.variable_values || {};
+  const clauseMap = new Map(((doc._workspaceClauses) || []).map((clause) => [String(clause.id), clause]));
+  document.querySelectorAll('[data-block-id]').forEach((node) => {
+    const sectionId = node.dataset.sectionId;
+    const blockId = node.dataset.blockId;
+    const section = getEditorSections().find((item) => item.id === sectionId);
+    const block = section?.blocks?.find((item) => item.id === blockId);
+    const content = node.querySelector('pre');
+    if (block && content) {
+      content.innerHTML = renderTokens(getBlockRawBody(block, clauseMap), values);
+    }
+  });
+
+  const selectedBlock = getSelectedBlock();
+  const inspectorPreview = document.querySelector('#inspector-token-preview');
+  if (selectedBlock && inspectorPreview) {
+    inspectorPreview.innerHTML = renderTokens(getBlockRawBody(selectedBlock, clauseMap), values);
+  }
 }
 
 function updateSection(sectionId, mutator) {
@@ -523,8 +562,10 @@ function editorScreen() {
   const workspaceClauses = (state.clauses || []).filter((clause) => String(clause.workspace_id) === String(document.workspace_id));
   document._workspaceClauses = workspaceClauses;
   const workspaceTaxonomy = (state.taxonomy || []).filter((item) => String(item.workspace_id) === String(document.workspace_id));
+  const workspaceTags = state.tags.filter((item) => String(item.workspace_id) === String(document.workspace_id));
   const clauseMap = new Map(workspaceClauses.map((clause) => [String(clause.id), clause]));
   const allVariables = [...new Set(Object.keys(document.variable_values || {}).concat(extractVariablesFromDocument(document, clauseMap)))].sort();
+  const libraryClauses = getFilteredClauses(document);
 
   return `
   <main class="shell editor-shell">
@@ -536,7 +577,7 @@ function editorScreen() {
       <div class="row">
         <span class="muted">${escapeHtml(state.saveState || 'Saved')}</span>
         <button id="back-to-dashboard" class="ghost">Dashboard</button>
-        <button id="save-document" ${state.editor.isSaving ? 'disabled' : ''}>${state.editor.isSaving ? 'Saving…' : 'Save now'}</button>
+        <button id="save-document" ${state.editor.saveStatus === 'saving' ? 'disabled' : ''}>${state.editor.saveStatus === 'saving' ? 'Saving…' : 'Save now'}</button>
       </div>
     </header>
 
@@ -551,10 +592,13 @@ function editorScreen() {
       saveStateLabel: state.saveState || 'Saved',
       inspectorOpen: Boolean(selectedBlock),
       taxonomy: workspaceTaxonomy,
-      clauses: workspaceClauses,
+      tags: workspaceTags,
+      libraryClauses,
       leftSearch: state.editor.leftSearch,
       activeLeftTab: state.editor.leftTab,
       tocSearch: state.editor.tocSearch,
+      selectedTaxonomy: state.editor.selectedTaxonomy,
+      selectedTag: state.editor.selectedTag,
       allVariables
     })}
 
@@ -562,8 +606,9 @@ function editorScreen() {
       open: state.editor.modalOpen,
       clauses: getFilteredClauses(document),
       taxonomy: workspaceTaxonomy,
-      tags: state.tags.filter((item) => String(item.workspace_id) === String(document.workspace_id)),
-      editorFilters: state.editor
+      tags: workspaceTags,
+      editorFilters: state.editor,
+      variableValues: document.variable_values || {}
     })}
   </main>
   `;
@@ -620,11 +665,7 @@ function wireEditorSpecificEvents() {
   }
 
   document.querySelector('#save-document')?.addEventListener('click', async () => {
-    if (state.editor.isSaving) {
-      return;
-    }
-    state.editor.dirty = true;
-    await saveEditorDocument();
+    await saveEditorDocument({ force: true });
   });
 
   document.querySelectorAll('[data-left-tab]').forEach((button) => {
@@ -644,19 +685,33 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#toc-search')?.addEventListener('input', (event) => {
     state.editor.tocSearch = event.target.value;
-    scheduleEditorRender();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#left-search')?.addEventListener('input', (event) => {
     state.editor.leftSearch = event.target.value;
-    scheduleEditorRender();
+    renderEditorPreservingFocus();
+  });
+
+  document.querySelector('#left-taxonomy-filter')?.addEventListener('change', (event) => {
+    state.editor.selectedTaxonomy = event.target.value;
+    renderEditorPreservingFocus();
+  });
+
+  document.querySelector('#left-tag-filter')?.addEventListener('change', (event) => {
+    state.editor.selectedTag = event.target.value;
+    renderEditorPreservingFocus();
   });
 
   document.querySelectorAll('[data-section-rename]').forEach((input) => {
     input.addEventListener('input', (event) => {
       const sectionId = event.currentTarget.dataset.sectionRename;
       updateSection(sectionId, (section) => ({ ...section, title: event.target.value || 'Untitled section' }));
-      scheduleEditorRender();
+      const title = event.target.value || 'Untitled';
+      const btn = event.currentTarget.closest('.section-item')?.querySelector('[data-scroll-section]');
+      if (btn) btn.textContent = `${Array.from(document.querySelectorAll('[data-scroll-section]')).indexOf(btn) + 1}. ${title}`;
+      const header = document.querySelector(`[data-edit-section-title="${sectionId}"]`);
+      if (header) header.textContent = title;
     });
   });
 
@@ -736,7 +791,7 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#inspector-text-body')?.addEventListener('input', (event) => {
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, body: event.target.value }));
-    scheduleEditorRender();
+    refreshLiveTokenPreviews();
   });
 
   document.querySelector('#inspector-clause-level')?.addEventListener('change', (event) => {
@@ -749,7 +804,7 @@ function wireEditorSpecificEvents() {
       ...block,
       overrides: { ...(block.overrides || {}), body: event.target.value }
     }));
-    scheduleEditorRender();
+    refreshLiveTokenPreviews();
   });
 
   document.querySelector('#inspector-include-toggle')?.addEventListener('change', (event) => {
@@ -765,7 +820,7 @@ function wireEditorSpecificEvents() {
   document.querySelector('#inspector-block-tags')?.addEventListener('input', (event) => {
     const tags = event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, tags }));
-    scheduleEditorRender();
+    refreshLiveTokenPreviews();
   });
 
   document.querySelectorAll('[data-edit-section-title]').forEach((heading) => {
@@ -793,7 +848,7 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#clause-search')?.addEventListener('input', (event) => {
     state.editor.search = event.target.value;
-    scheduleEditorRender();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#clause-tag-filter')?.addEventListener('change', (event) => {
@@ -865,7 +920,7 @@ function wireEditorSpecificEvents() {
         const key = event.target.dataset.variableKey;
         state.editor.document.variable_values = { ...state.editor.document.variable_values, [key]: event.target.value };
         markEditorDirty();
-        scheduleEditorRender();
+        refreshLiveTokenPreviews();
       });
     });
   }
@@ -950,17 +1005,20 @@ async function loadEditorDocument(documentId) {
     state.editor.leftTab = 'document';
     state.editor.modalOpen = false;
     state.editor.dirty = migrated;
-    state.editor.isSaving = false;
     state.editor.saveError = '';
     state.editor.pendingSave = false;
+    state.editor.pendingForceSave = false;
     state.editor.saveInFlight = null;
     state.editor.lastSavedFingerprint = getDocumentFingerprint(document);
-    state.saveState = migrated ? 'Unsaved changes (legacy sections converted to blocks)' : `Saved at ${new Date().toLocaleTimeString()}`;
+    state.editor.lastSavedAt = new Date().toLocaleTimeString();
+    state.saveState = migrated ? 'Unsaved changes (legacy sections converted to blocks)' : `Saved at ${state.editor.lastSavedAt}`;
+    state.editor.saveStatus = migrated ? 'dirty' : 'saved';
     if (migrated) {
       await saveEditorDocument();
     }
   } catch (error) {
     state.saveState = `Failed to load document: ${error.message}`;
+    state.editor.saveStatus = 'error';
   }
 }
 
@@ -1003,8 +1061,7 @@ async function init() {
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
-      state.editor.dirty = true;
-      void saveEditorDocument();
+      void saveEditorDocument({ force: true });
     }
   });
 
