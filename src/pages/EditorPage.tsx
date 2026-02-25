@@ -28,6 +28,7 @@ type DesktopWindowState = {
   y: number;
   z: number;
   visible: boolean;
+  docked: boolean;
 };
 
 type DragState = {
@@ -93,9 +94,9 @@ function reorderById<T extends { id: string | number }>(items: T[], fromId: stri
 
 const LIBRARY_TABS = ['project', 'clauses', 'assembly', 'materials', 'products'] as const;
 const DEFAULT_WINDOWS: Record<DesktopWindowKey, DesktopWindowState> = {
-  library: { x: 16, y: 16, z: 1, visible: true },
-  browser: { x: 336, y: 16, z: 2, visible: true },
-  properties: { x: 980, y: 16, z: 3, visible: true }
+  library: { x: 16, y: 16, z: 1, visible: true, docked: true },
+  browser: { x: 336, y: 16, z: 2, visible: true, docked: true },
+  properties: { x: 980, y: 16, z: 3, visible: true, docked: true }
 };
 
 type LibraryTab = typeof LIBRARY_TABS[number];
@@ -111,6 +112,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const [openMenu, setOpenMenu] = useState<'file' | 'edit' | 'view' | 'help' | null>(null);
   const [helpMessage, setHelpMessage] = useState('Tip: use View → Reset layout if windows overlap.');
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const desktopRef = useRef<HTMLElement | null>(null);
 
   const clauseMap = useMemo(() => new Map((clauses || []).map((clause) => [String(clause.id), clause])), [clauses]);
   const sections = document?.structure?.sections || [];
@@ -126,18 +128,30 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     if (!dragState) return;
 
     const onPointerMove = (event: PointerEvent) => {
+      const desktopBounds = desktopRef.current?.getBoundingClientRect();
+      const maxX = desktopBounds ? Math.max(0, desktopBounds.width - 260) : Number.POSITIVE_INFINITY;
+      const maxY = desktopBounds ? Math.max(0, desktopBounds.height - 120) : Number.POSITIVE_INFINITY;
       setDesktopWindows((prev) => ({
         ...prev,
         [dragState.key]: {
           ...prev[dragState.key],
-          x: Math.max(0, dragState.originX + event.clientX - dragState.startX),
-          y: Math.max(0, dragState.originY + event.clientY - dragState.startY)
+          x: Math.min(maxX, Math.max(0, dragState.originX + event.clientX - dragState.startX)),
+          y: Math.min(maxY, Math.max(0, dragState.originY + event.clientY - dragState.startY)),
+          docked: false
         }
       }));
     };
 
     const onPointerUp = (event: PointerEvent) => {
       if (event.pointerId === dragState.pointerId) {
+        setDesktopWindows((prev) => ({
+          ...prev,
+          [dragState.key]: {
+            ...prev[dragState.key],
+            x: Math.round(prev[dragState.key].x / 12) * 12,
+            y: Math.round(prev[dragState.key].y / 12) * 12
+          }
+        }));
         setDragState(null);
       }
     };
@@ -228,6 +242,26 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const resetLayout = () => {
     setDesktopWindows(DEFAULT_WINDOWS);
     setHighestZ(3);
+  };
+
+  const toggleDocked = (key: DesktopWindowKey) => {
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], docked: !prev[key].docked } }));
+    bringToFront(key);
+  };
+
+  const getWindowStyle = (key: DesktopWindowKey) => {
+    const state = desktopWindows[key];
+    if (!state.docked) {
+      return { left: state.x, top: state.y, zIndex: state.z };
+    }
+
+    if (key === 'library') {
+      return { left: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
+    }
+    if (key === 'browser') {
+      return { left: 'calc(24% + 18px)', top: 12, bottom: 12, width: 'calc(52% - 18px)', minWidth: 340, zIndex: state.z };
+    }
+    return { right: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
   };
 
   const handleTreeSelection = (node: TreeNodeItem) => {
@@ -328,7 +362,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'help' ? null : 'help'))}>Help</button>
               {openMenu === 'help' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag windows by their title bars. Use View to hide/show tools.'); setOpenMenu(null); }}>Window controls</button>
+                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag title bars to float windows. Use Dock/Undock for snapped split panes.'); setOpenMenu(null); }}>Window controls</button>
                   <button type="button" className="ghost" onClick={() => { setHelpMessage('Spec Writer desktop prototype inspired by classic Windows UI patterns.'); setOpenMenu(null); }}>About</button>
                 </div>
               ) : null}
@@ -339,11 +373,11 @@ export default function EditorPage({ clauses }: EditorPageProps) {
         </>
       )}
     >
-      <section className="windows-desktop">
+      <section className="windows-desktop" ref={desktopRef}>
         {desktopWindows.library.visible ? (
           <aside
             className="panel app-window app-window-library"
-            style={{ left: desktopWindows.library.x, top: desktopWindows.library.y, zIndex: desktopWindows.library.z }}
+            style={getWindowStyle('library')}
             onPointerDown={() => bringToFront('library')}
           >
             <div
@@ -354,7 +388,10 @@ export default function EditorPage({ clauses }: EditorPageProps) {
                 setDragState({ key: 'library', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.library.x, originY: desktopWindows.library.y });
               }}
             >
-              Library browser
+              <span>Library browser</span>
+              <button type="button" className="ghost" onClick={() => toggleDocked('library')}>
+                {desktopWindows.library.docked ? 'Undock' : 'Dock'}
+              </button>
             </div>
             <div className="left-tabs">
               {LIBRARY_TABS.map((tab) => (
@@ -385,7 +422,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
         {desktopWindows.browser.visible ? (
           <section
             className="panel app-window app-window-browser"
-            style={{ left: desktopWindows.browser.x, top: desktopWindows.browser.y, zIndex: desktopWindows.browser.z }}
+            style={getWindowStyle('browser')}
             onPointerDown={() => bringToFront('browser')}
           >
             <div
@@ -396,7 +433,10 @@ export default function EditorPage({ clauses }: EditorPageProps) {
                 setDragState({ key: 'browser', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.browser.x, originY: desktopWindows.browser.y });
               }}
             >
-              Document browser
+              <span>Document browser</span>
+              <button type="button" className="ghost" onClick={() => toggleDocked('browser')}>
+                {desktopWindows.browser.docked ? 'Undock' : 'Dock'}
+              </button>
             </div>
             <Canvas
               sections={sections}
@@ -411,7 +451,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
         {desktopWindows.properties.visible ? (
           <aside
             className="panel app-window app-window-properties"
-            style={{ left: desktopWindows.properties.x, top: desktopWindows.properties.y, zIndex: desktopWindows.properties.z }}
+            style={getWindowStyle('properties')}
             onPointerDown={() => bringToFront('properties')}
           >
             <div
@@ -422,7 +462,10 @@ export default function EditorPage({ clauses }: EditorPageProps) {
                 setDragState({ key: 'properties', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.properties.x, originY: desktopWindows.properties.y });
               }}
             >
-              Properties
+              <span>Properties</span>
+              <button type="button" className="ghost" onClick={() => toggleDocked('properties')}>
+                {desktopWindows.properties.docked ? 'Undock' : 'Dock'}
+              </button>
             </div>
             <Inspector
               className="window-inspector"
