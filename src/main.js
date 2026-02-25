@@ -44,9 +44,12 @@ const initialState = {
     autosaveTimer: null,
     dirty: false,
     observer: null,
+    renderTimer: null,
     saveInFlight: null,
     pendingSave: false,
-    lastSavedFingerprint: ''
+    lastSavedFingerprint: '',
+    isSaving: false,
+    saveError: ''
   }
 };
 
@@ -129,6 +132,77 @@ function scheduleAutosave() {
   }, 900);
 }
 
+function getStableElementIdentifier(element) {
+  if (!element) {
+    return null;
+  }
+  if (element.id) {
+    return { type: 'id', value: element.id };
+  }
+
+  const dataAttrs = ['variableKey', 'sectionRename', 'editSectionTitle', 'scrollSection', 'blockId', 'leftTab'];
+  for (const key of dataAttrs) {
+    if (element.dataset?.[key]) {
+      return { type: `data-${key}`, value: element.dataset[key] };
+    }
+  }
+
+  return null;
+}
+
+function captureFocusState() {
+  const active = document.activeElement;
+  const identifier = getStableElementIdentifier(active);
+  if (!identifier) {
+    return null;
+  }
+  return {
+    identifier,
+    selectionStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+    selectionEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null
+  };
+}
+
+function resolveElementByIdentifier(identifier) {
+  if (!identifier) {
+    return null;
+  }
+  if (identifier.type === 'id') {
+    return document.getElementById(identifier.value);
+  }
+
+  const dataKey = identifier.type.replace('data-', '');
+  const dataAttr = dataKey.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+  return document.querySelector(`[data-${dataAttr}="${CSS.escape(identifier.value)}"]`);
+}
+
+function restoreFocusState(focusState) {
+  if (!focusState) {
+    return;
+  }
+  const nextElement = resolveElementByIdentifier(focusState.identifier);
+  if (!nextElement) {
+    return;
+  }
+  nextElement.focus({ preventScroll: true });
+  if (typeof focusState.selectionStart === 'number' && typeof nextElement.setSelectionRange === 'function') {
+    nextElement.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart);
+  }
+}
+
+function renderEditorPreservingFocus() {
+  const focusState = captureFocusState();
+  render();
+  restoreFocusState(focusState);
+}
+
+function scheduleEditorRender(delay = 120) {
+  window.clearTimeout(state.editor.renderTimer);
+  state.editor.renderTimer = window.setTimeout(() => {
+    renderEditorPreservingFocus();
+  }, delay);
+}
+
 function markEditorDirty() {
   if (!state.editor.document) {
     return;
@@ -153,6 +227,8 @@ async function saveEditorDocument() {
   const currentFingerprint = getDocumentFingerprint(state.editor.document);
   if (!state.editor.dirty || currentFingerprint === state.editor.lastSavedFingerprint) {
     state.editor.dirty = false;
+    state.editor.saveError = '';
+    state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
     return;
   }
 
@@ -162,45 +238,53 @@ async function saveEditorDocument() {
     return state.editor.saveInFlight;
   }
 
+  state.editor.isSaving = true;
+  state.editor.saveError = '';
   state.saveState = 'Saving...';
-  render();
+  renderEditorPreservingFocus();
 
   state.editor.saveInFlight = (async () => {
     let saveError = null;
     try {
-      logDebug('Saving document', state.editor.document.id);
-      const savedDocument = await saveDocument(state.editor.document);
-      state.editor.document = savedDocument;
-      state.editor.lastSavedFingerprint = getDocumentFingerprint(savedDocument);
-      state.editor.dirty = false;
-      state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
-    } catch (error) {
-      saveError = error;
-      state.saveState = `Failed to save: ${error.message}`;
-      logDebug('Save failed', error);
-    }
+      try {
+        logDebug('Saving document', state.editor.document.id);
+        const savedDocument = await saveDocument(state.editor.document);
+        state.editor.document = savedDocument;
+        state.editor.lastSavedFingerprint = getDocumentFingerprint(savedDocument);
+        state.editor.dirty = false;
+        state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
+        state.editor.saveError = '';
+      } catch (error) {
+        saveError = error;
+        state.saveState = `Failed to save: ${error.message}`;
+        state.editor.saveError = error.message;
+        logDebug('Save failed', error);
+      }
 
-    try {
-      await refreshContext({ silent: true });
-    } catch (error) {
-      state.contextError = `Saved, but failed to refresh context: ${error.message}`;
-      logDebug('Refresh after save failed', error);
-    }
+      try {
+        await refreshContext({ silent: true });
+      } catch (error) {
+        state.contextError = `Saved, but failed to refresh context: ${error.message}`;
+        logDebug('Refresh after save failed', error);
+      }
 
-    state.editor.saveInFlight = null;
-    const shouldRunQueued = state.editor.pendingSave;
-    state.editor.pendingSave = false;
-    render();
+      state.editor.saveInFlight = null;
+      const shouldRunQueued = state.editor.pendingSave;
+      state.editor.pendingSave = false;
 
-    if (shouldRunQueued && state.editor.dirty) {
-      logDebug('Running queued save');
-      return saveEditorDocument();
-    }
+      if (shouldRunQueued && state.editor.dirty) {
+        logDebug('Running queued save');
+        return saveEditorDocument();
+      }
 
-    if (saveError) {
-      throw saveError;
+      if (saveError) {
+        throw saveError;
+      }
+      return state.editor.document;
+    } finally {
+      state.editor.isSaving = false;
+      renderEditorPreservingFocus();
     }
-    return state.editor.document;
   })();
 
   return state.editor.saveInFlight;
@@ -452,9 +536,11 @@ function editorScreen() {
       <div class="row">
         <span class="muted">${escapeHtml(state.saveState || 'Saved')}</span>
         <button id="back-to-dashboard" class="ghost">Dashboard</button>
-        <button id="save-document">Save now</button>
+        <button id="save-document" ${state.editor.isSaving ? 'disabled' : ''}>${state.editor.isSaving ? 'Saving…' : 'Save now'}</button>
       </div>
     </header>
+
+    ${state.editor.saveError ? `<section class="panel error-panel"><strong>Save failed.</strong><p class="error">${escapeHtml(state.editor.saveError)}</p></section>` : ''}
 
     ${renderEditorLayout({
       document,
@@ -534,6 +620,9 @@ function wireEditorSpecificEvents() {
   }
 
   document.querySelector('#save-document')?.addEventListener('click', async () => {
+    if (state.editor.isSaving) {
+      return;
+    }
     state.editor.dirty = true;
     await saveEditorDocument();
   });
@@ -541,7 +630,7 @@ function wireEditorSpecificEvents() {
   document.querySelectorAll('[data-left-tab]').forEach((button) => {
     button.addEventListener('click', (event) => {
       state.editor.leftTab = event.currentTarget.dataset.leftTab;
-      render();
+      renderEditorPreservingFocus();
     });
   });
 
@@ -555,19 +644,19 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#toc-search')?.addEventListener('input', (event) => {
     state.editor.tocSearch = event.target.value;
-    render();
+    scheduleEditorRender();
   });
 
   document.querySelector('#left-search')?.addEventListener('input', (event) => {
     state.editor.leftSearch = event.target.value;
-    render();
+    scheduleEditorRender();
   });
 
   document.querySelectorAll('[data-section-rename]').forEach((input) => {
     input.addEventListener('input', (event) => {
       const sectionId = event.currentTarget.dataset.sectionRename;
       updateSection(sectionId, (section) => ({ ...section, title: event.target.value || 'Untitled section' }));
-      render();
+      scheduleEditorRender();
     });
   });
 
@@ -647,12 +736,12 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#inspector-text-body')?.addEventListener('input', (event) => {
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, body: event.target.value }));
-    render();
+    scheduleEditorRender();
   });
 
   document.querySelector('#inspector-clause-level')?.addEventListener('change', (event) => {
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, level: event.target.value }));
-    render();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#inspector-clause-override')?.addEventListener('input', (event) => {
@@ -660,22 +749,23 @@ function wireEditorSpecificEvents() {
       ...block,
       overrides: { ...(block.overrides || {}), body: event.target.value }
     }));
-    render();
+    scheduleEditorRender();
   });
 
   document.querySelector('#inspector-include-toggle')?.addEventListener('change', (event) => {
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, include: event.target.value === 'true' }));
-    render();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#inspector-lock-toggle')?.addEventListener('change', (event) => {
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, locked: event.target.value === 'true' }));
-    render();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#inspector-block-tags')?.addEventListener('input', (event) => {
     const tags = event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean);
     updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, tags }));
+    scheduleEditorRender();
   });
 
   document.querySelectorAll('[data-edit-section-title]').forEach((heading) => {
@@ -703,17 +793,17 @@ function wireEditorSpecificEvents() {
 
   document.querySelector('#clause-search')?.addEventListener('input', (event) => {
     state.editor.search = event.target.value;
-    render();
+    scheduleEditorRender();
   });
 
   document.querySelector('#clause-tag-filter')?.addEventListener('change', (event) => {
     state.editor.selectedTag = event.target.value;
-    render();
+    renderEditorPreservingFocus();
   });
 
   document.querySelector('#clause-taxonomy-filter')?.addEventListener('change', (event) => {
     state.editor.selectedTaxonomy = event.target.value;
-    render();
+    renderEditorPreservingFocus();
   });
 
   document.querySelectorAll('[data-insert-clause]').forEach((button) => {
@@ -728,7 +818,7 @@ function wireEditorSpecificEvents() {
       state.editor.selectedBlockSectionId = selectedSection.id;
       state.editor.modalOpen = false;
       markEditorDirty();
-      render();
+      renderEditorPreservingFocus();
     });
   });
 
@@ -748,7 +838,7 @@ function wireEditorSpecificEvents() {
     if (!state.editor.document.variable_values?.[key]) {
       state.editor.document.variable_values = { ...state.editor.document.variable_values, [key]: '' };
     }
-    render();
+    renderEditorPreservingFocus();
   }
 
   document.querySelector('#insert-existing-variable')?.addEventListener('click', () => {
@@ -775,6 +865,7 @@ function wireEditorSpecificEvents() {
         const key = event.target.dataset.variableKey;
         state.editor.document.variable_values = { ...state.editor.document.variable_values, [key]: event.target.value };
         markEditorDirty();
+        scheduleEditorRender();
       });
     });
   }
@@ -859,6 +950,8 @@ async function loadEditorDocument(documentId) {
     state.editor.leftTab = 'document';
     state.editor.modalOpen = false;
     state.editor.dirty = migrated;
+    state.editor.isSaving = false;
+    state.editor.saveError = '';
     state.editor.pendingSave = false;
     state.editor.saveInFlight = null;
     state.editor.lastSavedFingerprint = getDocumentFingerprint(document);
@@ -911,7 +1004,7 @@ async function init() {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
       state.editor.dirty = true;
-      saveEditorDocument();
+      void saveEditorDocument();
     }
   });
 
