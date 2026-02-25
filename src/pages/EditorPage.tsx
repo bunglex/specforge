@@ -43,6 +43,11 @@ function getFirstBlockId(document: any) {
   return '';
 }
 
+function getFirstBlockIdForSection(section: any) {
+  const blockId = section?.blocks?.[0]?.id;
+  return blockId ? String(blockId) : '';
+}
+
 function updateDocumentBlock(document: any, blockId: string, updater: (block: any) => any) {
   const sections = document?.structure?.sections || [];
 
@@ -87,6 +92,15 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     return null;
   }, [sections, state.selectedBlockId]);
 
+  const activeSectionId = useMemo(() => {
+    for (const section of sections) {
+      if ((section.blocks || []).some((block: any) => String(block.id) === state.selectedBlockId)) {
+        return String(section.id);
+      }
+    }
+    return '';
+  }, [sections, state.selectedBlockId]);
+
   const updateSelectedBlock = (updater: (block: any) => any) => {
     if (!document || !state.selectedBlockId) return;
     const nextDocument = updateDocumentBlock(document, state.selectedBlockId, updater);
@@ -122,7 +136,19 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           <h2>Sections</h2>
           <div className="section-list">
             {sections.map((section: any) => (
-              <div className="section-item" key={section.id}>{section.title}</div>
+              <button
+                key={section.id}
+                type="button"
+                className={`section-item ${activeSectionId === String(section.id) ? 'active' : ''}`}
+                onClick={() => {
+                  const nextBlockId = getFirstBlockIdForSection(section);
+                  if (nextBlockId) {
+                    dispatch({ type: 'select_block', blockId: nextBlockId });
+                  }
+                }}
+              >
+                {section.title}
+              </button>
             ))}
             {sections.length === 0 ? <p className="muted">No sections.</p> : null}
           </div>
