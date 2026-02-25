@@ -261,6 +261,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   }), []);
 
   const activeNodes = activeLibrary === 'project' ? projectTreeNodes : sharedLibraryNodes[activeLibrary];
+  const visibleWindowCount = (Object.values(desktopWindows) as DesktopWindowState[]).filter((windowState) => windowState.visible).length;
 
   const updateSelectedBlock = (updater: (block: any) => any) => {
     if (!document || !state.selectedBlockId) return;
@@ -287,6 +288,18 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const resetLayout = () => {
     setDesktopWindows(DEFAULT_WINDOWS);
     setHighestZ(3);
+    setHelpMessage('Layout reset. All windows restored.');
+  };
+
+  const showAllWindows = () => {
+    setDesktopWindows((prev) => {
+      const next: Record<DesktopWindowKey, DesktopWindowState> = { ...prev };
+      (Object.keys(prev) as DesktopWindowKey[]).forEach((key) => {
+        next[key] = { ...prev[key], visible: true };
+      });
+      return next;
+    });
+    setHelpMessage('All windows shown.');
   };
 
   const toggleDocked = (key: DesktopWindowKey) => {
@@ -446,6 +459,22 @@ export default function EditorPage({ clauses }: EditorPageProps) {
       )}
     >
       <section className="windows-desktop" ref={desktopRef}>
+        {visibleWindowCount === 0 ? (
+          <div className="panel windows-empty-state">
+            <p>All editor windows are hidden.</p>
+            <div className="row">
+              <button type="button" onClick={() => resetLayout()}>Restore default layout</button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => showAllWindows()}
+              >
+                Show all windows
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {desktopWindows.library.visible ? (
           <aside
             className="panel app-window app-window-library"
