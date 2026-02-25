@@ -22,6 +22,7 @@ type EditorAction =
   | { type: 'toggle_clause_picker'; open: boolean };
 
 type DesktopWindowKey = 'library' | 'browser' | 'properties';
+type DockSlot = 'left' | 'center' | 'right';
 
 type DesktopWindowState = {
   x: number;
@@ -29,6 +30,7 @@ type DesktopWindowState = {
   z: number;
   visible: boolean;
   docked: boolean;
+  dockSlot: DockSlot;
 };
 
 type DragState = {
@@ -94,9 +96,9 @@ function reorderById<T extends { id: string | number }>(items: T[], fromId: stri
 
 const LIBRARY_TABS = ['project', 'clauses', 'assembly', 'materials', 'products'] as const;
 const DEFAULT_WINDOWS: Record<DesktopWindowKey, DesktopWindowState> = {
-  library: { x: 16, y: 16, z: 1, visible: true, docked: true },
-  browser: { x: 336, y: 16, z: 2, visible: true, docked: true },
-  properties: { x: 980, y: 16, z: 3, visible: true, docked: true }
+  library: { x: 16, y: 16, z: 1, visible: true, docked: true, dockSlot: 'left' },
+  browser: { x: 336, y: 16, z: 2, visible: true, docked: true, dockSlot: 'center' },
+  properties: { x: 980, y: 16, z: 3, visible: true, docked: true, dockSlot: 'right' }
 };
 
 type LibraryTab = typeof LIBRARY_TABS[number];
@@ -124,6 +126,42 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     }
   }, [document?.id]);
 
+  const maybeGetDockSlot = (clientX: number, clientY: number): DockSlot | null => {
+    const bounds = desktopRef.current?.getBoundingClientRect();
+    if (!bounds) return null;
+
+    const relativeX = clientX - bounds.left;
+    const relativeY = clientY - bounds.top;
+    const snapDistance = 110;
+
+    if (relativeX <= snapDistance) return 'left';
+    if (relativeX >= bounds.width - snapDistance) return 'right';
+    if (relativeY <= snapDistance) return 'center';
+    return null;
+  };
+
+  const dockWindowToSlot = (key: DesktopWindowKey, slot: DockSlot) => {
+    setDesktopWindows((prev) => {
+      const current = prev[key];
+      const next: Record<DesktopWindowKey, DesktopWindowState> = {
+        ...prev,
+        [key]: { ...current, docked: true, dockSlot: slot }
+      };
+
+      const conflictKey = (Object.keys(prev) as DesktopWindowKey[]).find((candidate) => (
+        candidate !== key && prev[candidate].docked && prev[candidate].dockSlot === slot
+      ));
+
+      if (!conflictKey) return next;
+      if (current.docked) {
+        next[conflictKey] = { ...prev[conflictKey], dockSlot: current.dockSlot };
+      } else {
+        next[conflictKey] = { ...prev[conflictKey], docked: false };
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!dragState) return;
 
@@ -144,14 +182,19 @@ export default function EditorPage({ clauses }: EditorPageProps) {
 
     const onPointerUp = (event: PointerEvent) => {
       if (event.pointerId === dragState.pointerId) {
-        setDesktopWindows((prev) => ({
-          ...prev,
-          [dragState.key]: {
-            ...prev[dragState.key],
-            x: Math.round(prev[dragState.key].x / 12) * 12,
-            y: Math.round(prev[dragState.key].y / 12) * 12
-          }
-        }));
+        const dockSlot = maybeGetDockSlot(event.clientX, event.clientY);
+        if (dockSlot) {
+          dockWindowToSlot(dragState.key, dockSlot);
+        } else {
+          setDesktopWindows((prev) => ({
+            ...prev,
+            [dragState.key]: {
+              ...prev[dragState.key],
+              x: Math.round(prev[dragState.key].x / 12) * 12,
+              y: Math.round(prev[dragState.key].y / 12) * 12
+            }
+          }));
+        }
         setDragState(null);
       }
     };
@@ -245,7 +288,14 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   };
 
   const toggleDocked = (key: DesktopWindowKey) => {
-    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], docked: !prev[key].docked } }));
+    setDesktopWindows((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        docked: !prev[key].docked,
+        dockSlot: prev[key].dockSlot || DEFAULT_WINDOWS[key].dockSlot
+      }
+    }));
     bringToFront(key);
   };
 
@@ -255,10 +305,10 @@ export default function EditorPage({ clauses }: EditorPageProps) {
       return { left: state.x, top: state.y, zIndex: state.z };
     }
 
-    if (key === 'library') {
+    if (state.dockSlot === 'left') {
       return { left: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
     }
-    if (key === 'browser') {
+    if (state.dockSlot === 'center') {
       return { left: 'calc(24% + 18px)', top: 12, bottom: 12, width: 'calc(52% - 18px)', minWidth: 340, zIndex: state.z };
     }
     return { right: 12, top: 12, bottom: 12, width: '24%', minWidth: 260, zIndex: state.z };
@@ -362,7 +412,7 @@ export default function EditorPage({ clauses }: EditorPageProps) {
               <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'help' ? null : 'help'))}>Help</button>
               {openMenu === 'help' ? (
                 <div className="menu-dropdown">
-                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag title bars to float windows. Use Dock/Undock for snapped split panes.'); setOpenMenu(null); }}>Window controls</button>
+                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag a title bar to the left/right edge to snap dock, or top edge to center dock.'); setOpenMenu(null); }}>Window controls</button>
                   <button type="button" className="ghost" onClick={() => { setHelpMessage('Spec Writer desktop prototype inspired by classic Windows UI patterns.'); setOpenMenu(null); }}>About</button>
                 </div>
               ) : null}
