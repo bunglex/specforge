@@ -30,17 +30,42 @@ Run SQL in this order:
 
 Before running the seed script, replace `YOUR_AUTH_USER_ID_HERE` with your actual Auth user UUID so your account is attached to the demo workspace.
 
-## 4) What gets created
+## 4) Document structure format (block-based)
 
-Schema includes:
-- Core workspace membership tables (`workspaces`, `workspace_members`)
-- Existing metadata tables (`tags`, `taxonomy`, `modules`)
-- New app tables:
-  - `documents` (structured document sections + variable values)
-  - `clause_library` (reusable clauses with taxonomy + tags)
+`documents.structure` now stores sections with a block list:
 
-Seed includes:
-- 1 demo workspace
-- taxonomy + tags
-- example clauses with placeholders (`{{client_name}}` style)
-- one example document with sections and variables
+```json
+{
+  "sections": [
+    {
+      "id": "uuid",
+      "title": "Introduction",
+      "blocks": [
+        { "id": "uuid", "type": "text", "body": "Plain text block" },
+        {
+          "id": "uuid",
+          "type": "clause_ref",
+          "clause_id": "uuid",
+          "level": "standard",
+          "overrides": { "body": "Optional override text" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Legacy section payloads with `content` are automatically converted on first document open and then saved back.
+
+## 5) New editor interactions
+
+The editor route is now a 3-pane interface:
+- **Left (TOC):** section list + search.
+- **Middle (Preview):** scrollable rendered section/block preview with anchors.
+- **Right (Inspector):** block editor (text/clause settings + variable values).
+
+Shortcuts:
+- `Esc`: close the inspector (clear selected block).
+- `Ctrl+S` / `Cmd+S`: force immediate save.
+
+Autosave runs with a ~900ms debounce and shows **Saved / Unsaved** status in the header.

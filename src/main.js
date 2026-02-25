@@ -1,6 +1,13 @@
 import '../style.css';
 import { hasSupabaseConfig, supabase } from './supabaseClient';
 import { createDocument, getDocument, loadWorkspaceContext, saveDocument } from './api';
+import {
+  createClauseRefBlock,
+  createTextBlock,
+  extractVariablesFromDocument,
+  normalizeDocumentStructure
+} from './editor/model';
+import { renderClausePickerModal, renderEditorLayout, renderVariableInputs } from './editor/components';
 
 const app = document.querySelector('#app');
 
@@ -21,11 +28,17 @@ const state = {
   selectedProject: 'all',
   editor: {
     document: null,
-    selectedSectionId: '',
+    activeSectionId: '',
+    selectedBlockId: '',
+    selectedBlockSectionId: '',
+    tocSearch: '',
     search: '',
     selectedTag: 'all',
     selectedTaxonomy: 'all',
-    modalOpen: false
+    modalOpen: false,
+    autosaveTimer: null,
+    dirty: false,
+    observer: null
   }
 };
 
@@ -52,25 +65,6 @@ function getRoute() {
   return { name: 'dashboard' };
 }
 
-function extractVariablesFromDocument(document) {
-  const regex = /{{\s*([a-zA-Z0-9_\-.]+)\s*}}/g;
-  const keys = new Set();
-  const sections = document?.structure?.sections || [];
-
-  for (const section of sections) {
-    const content = section.content || '';
-    for (const match of content.matchAll(regex)) {
-      keys.add(match[1]);
-    }
-  }
-
-  return [...keys].sort();
-}
-
-function renderWithVariables(content, values) {
-  return (content || '').replaceAll(/{{\s*([a-zA-Z0-9_\-.]+)\s*}}/g, (_, key) => values?.[key] || `{{${key}}}`);
-}
-
 function getProjectsForWorkspace() {
   const docs = state.documents.filter((doc) => String(doc.workspace_id) === String(state.selectedWorkspaceId));
   return [...new Set(docs.map((doc) => doc.project_name).filter(Boolean))].sort();
@@ -82,6 +76,62 @@ function getFilteredDocuments() {
     return docs;
   }
   return docs.filter((doc) => doc.project_name === state.selectedProject);
+}
+
+function getEditorSections() {
+  return state.editor.document?.structure?.sections || [];
+}
+
+function getSelectedSection() {
+  return getEditorSections().find((section) => section.id === state.editor.activeSectionId) || getEditorSections()[0] || null;
+}
+
+function getSelectedBlock() {
+  const section = getEditorSections().find((item) => item.id === state.editor.selectedBlockSectionId);
+  return section?.blocks?.find((block) => block.id === state.editor.selectedBlockId) || null;
+}
+
+function markEditorDirty() {
+  state.editor.dirty = true;
+  state.saveState = 'Unsaved changes';
+  window.clearTimeout(state.editor.autosaveTimer);
+  state.editor.autosaveTimer = window.setTimeout(() => {
+    saveEditorDocument();
+  }, 900);
+}
+
+async function saveEditorDocument() {
+  if (!state.editor.document || !state.editor.dirty) {
+    return;
+  }
+  try {
+    state.saveState = 'Saving…';
+    render();
+    state.editor.document = await saveDocument(state.editor.document);
+    state.editor.dirty = false;
+    state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
+    await refreshContext();
+  } catch (error) {
+    state.saveState = `Failed to save: ${error.message}`;
+  }
+  render();
+}
+
+function updateSection(sectionId, mutator) {
+  const sections = getEditorSections();
+  const index = sections.findIndex((section) => section.id === sectionId);
+  if (index < 0) {
+    return;
+  }
+  sections[index] = mutator(sections[index]);
+  markEditorDirty();
+}
+
+function updateBlock(sectionId, blockId, mutator) {
+  updateSection(sectionId, (section) => ({
+    ...section,
+    blocks: (section.blocks || []).map((block) => (block.id === blockId ? mutator(block) : block))
+  }));
 }
 
 async function refreshContext() {
@@ -204,23 +254,8 @@ function dashboardScreen() {
   `;
 }
 
-function getSelectedSection() {
-  const sections = state.editor.document?.structure?.sections || [];
-  return sections.find((section) => section.id === state.editor.selectedSectionId) || sections[0] || null;
-}
-
-function editorScreen() {
-  const document = state.editor.document;
-  if (!document) {
-    return `<main class="shell"><section class="panel"><h2>Loading editor…</h2></section></main>`;
-  }
-
-  const sections = document.structure?.sections || [];
-  const selectedSection = getSelectedSection();
-  const variableKeys = extractVariablesFromDocument(document);
-  const values = document.variable_values || {};
-
-  const clauses = state.clauses.filter((clause) => {
+function getFilteredClauses(document) {
+  return state.clauses.filter((clause) => {
     if (String(clause.workspace_id) !== String(document.workspace_id)) {
       return false;
     }
@@ -241,6 +276,21 @@ function editorScreen() {
 
     return true;
   });
+}
+
+function editorScreen() {
+  const document = state.editor.document;
+  if (!document) {
+    return `<main class="shell"><section class="panel"><h2>Loading editor…</h2></section></main>`;
+  }
+
+  const sections = getEditorSections();
+  const selectedBlock = getSelectedBlock();
+  const filteredSections = sections.filter((section) =>
+    (section.title || '').toLowerCase().includes(state.editor.tocSearch.toLowerCase().trim())
+  );
+
+  document._workspaceClauses = state.clauses.filter((clause) => String(clause.workspace_id) === String(document.workspace_id));
 
   return `
   <main class="shell editor-shell">
@@ -250,88 +300,29 @@ function editorScreen() {
         <p>${escapeHtml(document.project_name || 'No project')}</p>
       </div>
       <div class="row">
+        <span class="muted">${escapeHtml(state.saveState || 'Saved')}</span>
         <button id="back-to-dashboard" class="ghost">Dashboard</button>
-        <button id="save-document">Save</button>
+        <button id="save-document">Save now</button>
       </div>
     </header>
 
-    ${state.saveState ? `<p class="${state.saveState.includes('Failed') ? 'error' : 'muted'}">${escapeHtml(state.saveState)}</p>` : ''}
+    ${renderEditorLayout({
+      document,
+      sections,
+      filteredSections,
+      activeSectionId: state.editor.activeSectionId,
+      selectedBlock,
+      saveStateLabel: state.saveState || 'Saved',
+      inspectorOpen: Boolean(selectedBlock)
+    })}
 
-    <section class="editor-layout">
-      <aside class="panel outline-panel">
-        <h2>Sections</h2>
-        <div class="outline-list">
-          ${sections.map((section) => `<button class="outline-item ${selectedSection?.id === section.id ? 'active' : ''}" data-section-id="${section.id}">${escapeHtml(section.title || 'Untitled')}</button>`).join('')}
-        </div>
-        <button id="add-section" class="ghost">+ Add section</button>
-      </aside>
-
-      <section class="panel content-panel">
-        <div class="content-header">
-          <h2>Editor</h2>
-          <button id="open-clause-modal" class="ghost">Insert Clause</button>
-        </div>
-
-        ${selectedSection ? `
-          <label>Section title</label>
-          <input id="section-title-input" value="${escapeHtml(selectedSection.title)}" />
-          <label>Body</label>
-          <textarea id="section-content-input" rows="12">${escapeHtml(selectedSection.content || '')}</textarea>
-          <h3>Preview</h3>
-          <article class="preview-block">${escapeHtml(renderWithVariables(selectedSection.content, values))}</article>
-        ` : '<p class="muted">Add a section to begin.</p>'}
-      </section>
-
-      <aside class="panel variables-panel">
-        <h2>Variables</h2>
-        ${variableKeys.length === 0 ? '<p class="muted">No placeholders detected. Use {{variable_name}} in section content.</p>' : ''}
-        ${variableKeys.map((key) => `
-          <label class="variable-field">
-            <span>${escapeHtml(key)}</span>
-            <input data-variable-key="${escapeHtml(key)}" value="${escapeHtml(values[key] || '')}" placeholder="Enter value" />
-          </label>
-        `).join('')}
-      </aside>
-    </section>
-
-    ${state.editor.modalOpen ? `
-      <section class="modal-overlay">
-        <div class="modal panel">
-          <div class="content-header">
-            <h2>Clause Library</h2>
-            <button id="close-clause-modal" class="ghost">Close</button>
-          </div>
-          <div class="clause-filters">
-            <input id="clause-search" value="${escapeHtml(state.editor.search)}" placeholder="Search by title or body" />
-            <select id="clause-taxonomy-filter">
-              <option value="all">All taxonomy</option>
-              ${state.taxonomy
-                .filter((item) => String(item.workspace_id) === String(document.workspace_id))
-                .map((item) => `<option value="${item.id}" ${String(item.id) === String(state.editor.selectedTaxonomy) ? 'selected' : ''}>${escapeHtml(item.name)}</option>`)
-                .join('')}
-            </select>
-            <select id="clause-tag-filter">
-              <option value="all">All tags</option>
-              ${state.tags
-                .filter((item) => String(item.workspace_id) === String(document.workspace_id))
-                .map((item) => `<option value="${escapeHtml(item.name)}" ${item.name === state.editor.selectedTag ? 'selected' : ''}>${escapeHtml(item.name)}</option>`)
-                .join('')}
-            </select>
-          </div>
-          <div class="clause-list">
-            ${clauses.length === 0 ? '<p class="muted">No clauses match your filters.</p>' : ''}
-            ${clauses.map((clause) => `
-              <article>
-                <h3>${escapeHtml(clause.title)}</h3>
-                <p class="muted">Tags: ${(clause.tags || []).map(escapeHtml).join(', ') || 'none'}</p>
-                <p>${escapeHtml(clause.body)}</p>
-                <button data-insert-clause="${clause.id}">Insert</button>
-              </article>
-            `).join('')}
-          </div>
-        </div>
-      </section>
-    ` : ''}
+    ${renderClausePickerModal({
+      open: state.editor.modalOpen,
+      clauses: getFilteredClauses(document),
+      taxonomy: state.taxonomy.filter((item) => String(item.workspace_id) === String(document.workspace_id)),
+      tags: state.tags.filter((item) => String(item.workspace_id) === String(document.workspace_id)),
+      editorFilters: state.editor
+    })}
   </main>
   `;
 }
@@ -353,25 +344,165 @@ function render() {
   wireCommonEvents();
 }
 
-function updateSelectedSection(mutator) {
-  const sections = state.editor.document?.structure?.sections || [];
-  const index = sections.findIndex((section) => section.id === state.editor.selectedSectionId);
-  if (index < 0) {
+function setupIntersectionObserver() {
+  if (state.editor.observer) {
+    state.editor.observer.disconnect();
+  }
+  const scrollContainer = document.querySelector('#preview-scroll-container');
+  if (!scrollContainer) {
     return;
   }
 
-  sections[index] = mutator(sections[index]);
+  const targets = [...document.querySelectorAll('[data-section-anchor]')];
+  state.editor.observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible?.target?.dataset?.sectionAnchor) {
+        state.editor.activeSectionId = visible.target.dataset.sectionAnchor;
+        document.querySelectorAll('[data-scroll-section]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.scrollSection === state.editor.activeSectionId);
+        });
+      }
+    },
+    { root: scrollContainer, threshold: [0.2, 0.5, 0.8] }
+  );
+
+  targets.forEach((target) => state.editor.observer.observe(target));
 }
 
-async function loadEditorDocument(documentId) {
-  try {
-    const document = await getDocument(documentId);
-    state.editor.document = document;
-    state.editor.selectedSectionId = document.structure?.sections?.[0]?.id || '';
-    state.saveState = '';
-  } catch (error) {
-    state.saveState = `Failed to load document: ${error.message}`;
+function wireEditorSpecificEvents() {
+  document.querySelector('#save-document')?.addEventListener('click', async () => {
+    state.editor.dirty = true;
+    await saveEditorDocument();
+  });
+
+  document.querySelector('#add-section')?.addEventListener('click', () => {
+    const section = { id: crypto.randomUUID(), title: 'New section', blocks: [createTextBlock('')] };
+    state.editor.document.structure.sections.push(section);
+    state.editor.activeSectionId = section.id;
+    state.editor.selectedBlockId = section.blocks[0].id;
+    state.editor.selectedBlockSectionId = section.id;
+    markEditorDirty();
+    render();
+  });
+
+  document.querySelector('#toc-search')?.addEventListener('input', (event) => {
+    state.editor.tocSearch = event.target.value;
+    render();
+  });
+
+  document.querySelectorAll('[data-scroll-section]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const sectionId = event.currentTarget.dataset.scrollSection;
+      state.editor.activeSectionId = sectionId;
+      const anchor = document.querySelector(`#section-${sectionId}`);
+      anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.querySelectorAll('[data-scroll-section]').forEach((item) => {
+        item.classList.toggle('active', item.dataset.scrollSection === sectionId);
+      });
+    });
+  });
+
+  document.querySelectorAll('[data-block-id]').forEach((node) => {
+    node.addEventListener('click', (event) => {
+      const blockId = event.currentTarget.dataset.blockId;
+      const sectionId = event.currentTarget.dataset.sectionId;
+      state.editor.selectedBlockId = blockId;
+      state.editor.selectedBlockSectionId = sectionId;
+      render();
+    });
+  });
+
+  document.querySelector('#inspector-text-body')?.addEventListener('input', (event) => {
+    updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, body: event.target.value }));
+    render();
+  });
+
+  document.querySelector('#inspector-clause-level')?.addEventListener('change', (event) => {
+    updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({ ...block, level: event.target.value }));
+    render();
+  });
+
+  document.querySelector('#inspector-clause-override')?.addEventListener('input', (event) => {
+    updateBlock(state.editor.selectedBlockSectionId, state.editor.selectedBlockId, (block) => ({
+      ...block,
+      overrides: { ...(block.overrides || {}), body: event.target.value }
+    }));
+    render();
+  });
+
+  document.querySelectorAll('[data-edit-section-title]').forEach((heading) => {
+    heading.addEventListener('blur', (event) => {
+      const sectionId = event.currentTarget.dataset.editSectionTitle;
+      updateSection(sectionId, (section) => ({ ...section, title: event.currentTarget.textContent || 'Untitled section' }));
+      render();
+    });
+  });
+
+  document.querySelector('#open-clause-modal')?.addEventListener('click', () => {
+    state.editor.modalOpen = true;
+    render();
+  });
+
+  document.querySelector('#inspector-insert-clause')?.addEventListener('click', () => {
+    state.editor.modalOpen = true;
+    render();
+  });
+
+  document.querySelector('#close-clause-modal')?.addEventListener('click', () => {
+    state.editor.modalOpen = false;
+    render();
+  });
+
+  document.querySelector('#clause-search')?.addEventListener('input', (event) => {
+    state.editor.search = event.target.value;
+    render();
+  });
+
+  document.querySelector('#clause-tag-filter')?.addEventListener('change', (event) => {
+    state.editor.selectedTag = event.target.value;
+    render();
+  });
+
+  document.querySelector('#clause-taxonomy-filter')?.addEventListener('change', (event) => {
+    state.editor.selectedTaxonomy = event.target.value;
+    render();
+  });
+
+  document.querySelectorAll('[data-insert-clause]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const selectedSection = getSelectedSection();
+      if (!selectedSection) {
+        return;
+      }
+      const block = createClauseRefBlock(event.currentTarget.dataset.insertClause);
+      selectedSection.blocks.push(block);
+      state.editor.selectedBlockId = block.id;
+      state.editor.selectedBlockSectionId = selectedSection.id;
+      state.editor.modalOpen = false;
+      markEditorDirty();
+      render();
+    });
+  });
+
+  const clauseMap = new Map((state.editor.document._workspaceClauses || []).map((clause) => [String(clause.id), clause]));
+  const selectedBlock = getSelectedBlock();
+  const variables = selectedBlock ? [...extractVariablesFromDocument({ structure: { sections: [{ blocks: [selectedBlock] }] } }, clauseMap)] : [];
+  const variableContainer = document.querySelector('#inspector-variable-list');
+  if (variableContainer) {
+    renderVariableInputs(variableContainer, variables, state.editor.document.variable_values || {});
+    variableContainer.querySelectorAll('[data-variable-key]').forEach((input) => {
+      input.addEventListener('input', (event) => {
+        const key = event.target.dataset.variableKey;
+        state.editor.document.variable_values = { ...state.editor.document.variable_values, [key]: event.target.value };
+        markEditorDirty();
+      });
+    });
   }
+
+  setupIntersectionObserver();
 }
 
 function wireCommonEvents() {
@@ -428,94 +559,29 @@ function wireCommonEvents() {
 
   document.querySelector('#back-to-dashboard')?.addEventListener('click', () => navigate('/'));
 
-  document.querySelector('#save-document')?.addEventListener('click', async () => {
-    if (!state.editor.document) {
-      return;
-    }
-    try {
-      state.saveState = 'Saving…';
-      render();
-      state.editor.document = await saveDocument(state.editor.document);
-      state.saveState = `Saved at ${new Date().toLocaleTimeString()}`;
-      await refreshContext();
-    } catch (error) {
-      state.saveState = `Failed to save: ${error.message}`;
-    }
-    render();
-  });
+  if (getRoute().name === 'editor') {
+    wireEditorSpecificEvents();
+  }
+}
 
-  document.querySelectorAll('[data-section-id]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      state.editor.selectedSectionId = event.currentTarget.dataset.sectionId;
-      render();
-    });
-  });
-
-  document.querySelector('#add-section')?.addEventListener('click', () => {
-    const newSection = { id: crypto.randomUUID(), title: 'New section', content: '' };
-    state.editor.document.structure.sections.push(newSection);
-    state.editor.selectedSectionId = newSection.id;
-    render();
-  });
-
-  document.querySelector('#section-title-input')?.addEventListener('input', (event) => {
-    updateSelectedSection((section) => ({ ...section, title: event.target.value }));
-    render();
-  });
-
-  document.querySelector('#section-content-input')?.addEventListener('input', (event) => {
-    updateSelectedSection((section) => ({ ...section, content: event.target.value }));
-    render();
-  });
-
-  document.querySelectorAll('[data-variable-key]').forEach((input) => {
-    input.addEventListener('input', (event) => {
-      const key = event.target.dataset.variableKey;
-      state.editor.document.variable_values = { ...state.editor.document.variable_values, [key]: event.target.value };
-      render();
-    });
-  });
-
-  document.querySelector('#open-clause-modal')?.addEventListener('click', () => {
-    state.editor.modalOpen = true;
-    render();
-  });
-
-  document.querySelector('#close-clause-modal')?.addEventListener('click', () => {
+async function loadEditorDocument(documentId) {
+  try {
+    const sourceDocument = await getDocument(documentId);
+    const { document, migrated } = normalizeDocumentStructure(sourceDocument);
+    state.editor.document = document;
+    state.editor.activeSectionId = document.structure?.sections?.[0]?.id || '';
+    state.editor.selectedBlockSectionId = document.structure?.sections?.[0]?.id || '';
+    state.editor.selectedBlockId = document.structure?.sections?.[0]?.blocks?.[0]?.id || '';
+    state.editor.tocSearch = '';
     state.editor.modalOpen = false;
-    render();
-  });
-
-  document.querySelector('#clause-search')?.addEventListener('input', (event) => {
-    state.editor.search = event.target.value;
-    render();
-  });
-
-  document.querySelector('#clause-tag-filter')?.addEventListener('change', (event) => {
-    state.editor.selectedTag = event.target.value;
-    render();
-  });
-
-  document.querySelector('#clause-taxonomy-filter')?.addEventListener('change', (event) => {
-    state.editor.selectedTaxonomy = event.target.value;
-    render();
-  });
-
-  document.querySelectorAll('[data-insert-clause]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      const clause = state.clauses.find((item) => String(item.id) === String(event.currentTarget.dataset.insertClause));
-      if (!clause) {
-        return;
-      }
-
-      updateSelectedSection((section) => ({
-        ...section,
-        content: `${section.content || ''}${section.content ? '\n\n' : ''}${clause.body}`
-      }));
-      state.editor.modalOpen = false;
-      render();
-    });
-  });
+    state.editor.dirty = migrated;
+    state.saveState = migrated ? 'Unsaved changes (legacy sections converted to blocks)' : 'Saved';
+    if (migrated) {
+      await saveEditorDocument();
+    }
+  } catch (error) {
+    state.saveState = `Failed to load document: ${error.message}`;
+  }
 }
 
 async function init() {
@@ -540,6 +606,24 @@ async function init() {
     await refreshContext();
     await handleRouteData();
     render();
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (getRoute().name !== 'editor') {
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      state.editor.selectedBlockId = '';
+      state.editor.selectedBlockSectionId = '';
+      render();
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      state.editor.dirty = true;
+      saveEditorDocument();
+    }
   });
 
   window.addEventListener('popstate', async () => {
