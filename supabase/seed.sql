@@ -20,48 +20,11 @@ on conflict (workspace_id, user_id) do update set role = excluded.role;
 with target_workspace as (
   select id from public.workspaces where slug = 'specforge-demo' limit 1
 )
-insert into public.modules (workspace_id, title, override_html, variables_schema)
-select
-  tw.id,
-  v.title,
-  v.override_html,
-  v.variables_schema::jsonb
-from target_workspace tw
-cross join (
-  values
-    (
-      'PRD Generator',
-      '<section><h2>PRD Preview</h2><p>Use variables below to shape your requirement doc.</p></section>',
-      '[
-        {"key":"feature_name","label":"Feature name","type":"text","required":true,"placeholder":"Smart routing"},
-        {"key":"target_user","label":"Target user","type":"text","placeholder":"Growth PM"},
-        {"key":"constraints","label":"Constraints","type":"textarea","placeholder":"Latency under 200ms"}
-      ]'
-    ),
-    (
-      'Tech Spec Generator',
-      '<section><h2>Tech Spec Preview</h2><p>Capture architecture and rollout details.</p></section>',
-      '[
-        {"key":"service_name","label":"Service","type":"text","required":true,"placeholder":"specforge-api"},
-        {"key":"sla","label":"SLA","type":"text","placeholder":"99.9%"}
-      ]'
-    )
- ) as v(title, override_html, variables_schema)
-where not exists (
-  select 1
-  from public.modules m
-  where m.workspace_id = tw.id
-    and m.title = v.title
-);
-
-with target_workspace as (
-  select id from public.workspaces where slug = 'specforge-demo' limit 1
-)
 insert into public.tags (workspace_id, name)
 select tw.id, v.name
 from target_workspace tw
 cross join (
-  values ('frontend'), ('backend'), ('security'), ('performance')
+  values ('legal'), ('security'), ('compliance'), ('delivery')
 ) as v(name)
 where not exists (
   select 1
@@ -78,9 +41,9 @@ select tw.id, v.name, v.category
 from target_workspace tw
 cross join (
   values
-    ('MVP', 'stage'),
-    ('Iteration', 'stage'),
-    ('Core Experience', 'priority')
+    ('Commercial', 'domain'),
+    ('Implementation', 'domain'),
+    ('Risk', 'domain')
 ) as v(name, category)
 where not exists (
   select 1
@@ -88,4 +51,71 @@ where not exists (
   where tx.workspace_id = tw.id
     and tx.name = v.name
     and coalesce(tx.category, '') = coalesce(v.category, '')
+);
+
+with target_workspace as (
+  select id from public.workspaces where slug = 'specforge-demo' limit 1
+),
+first_taxonomy as (
+  select id, name from public.taxonomy where workspace_id = (select id from target_workspace)
+),
+rows_to_insert as (
+  select
+    tw.id as workspace_id,
+    v.title,
+    v.body,
+    (select ft.id from first_taxonomy ft where ft.name = v.taxonomy_name limit 1) as taxonomy_id,
+    v.tags::text[] as tags
+  from target_workspace tw
+  cross join (
+    values
+      (
+        'Statement of Objectives',
+        'This document captures the objectives for {{client_name}} and aligns delivery with {{target_outcome}}.',
+        'Commercial',
+        '{delivery}'
+      ),
+      (
+        'Scope Clarification',
+        'In-scope items: {{scope_in}}. Out-of-scope items: {{scope_out}}.',
+        'Implementation',
+        '{compliance,delivery}'
+      ),
+      (
+        'Risk and Mitigation',
+        'Known risks include {{risk_summary}}. Planned mitigations: {{mitigation_plan}}.',
+        'Risk',
+        '{security,compliance}'
+      )
+  ) as v(title, body, taxonomy_name, tags)
+)
+insert into public.clause_library (workspace_id, taxonomy_id, title, body, tags)
+select workspace_id, taxonomy_id, title, body, tags
+from rows_to_insert r
+where not exists (
+  select 1
+  from public.clause_library cl
+  where cl.workspace_id = r.workspace_id
+    and cl.title = r.title
+);
+
+with target_workspace as (
+  select id from public.workspaces where slug = 'specforge-demo' limit 1
+)
+insert into public.documents (workspace_id, project_name, title, structure, variable_values)
+select
+  tw.id,
+  'Demo Project',
+  'Client Specification Draft',
+  jsonb_build_object(
+    'sections',
+    jsonb_build_array(
+      jsonb_build_object('id', gen_random_uuid(), 'title', 'Overview', 'content', 'Prepared for {{client_name}} to deliver {{target_outcome}}.'),
+      jsonb_build_object('id', gen_random_uuid(), 'title', 'Scope', 'content', 'Scope includes {{scope_in}} and excludes {{scope_out}}.')
+    )
+  ),
+  '{"client_name":"Acme Corp","target_outcome":"faster onboarding"}'::jsonb
+from target_workspace tw
+where not exists (
+  select 1 from public.documents d where d.workspace_id = tw.id and d.title = 'Client Specification Draft'
 );
