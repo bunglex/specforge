@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import AppShell from '../components/AppShell';
 import Canvas from '../components/Canvas';
@@ -20,6 +20,24 @@ type EditorAction =
   | { type: 'initialize_selection'; blockId: string }
   | { type: 'select_block'; blockId: string }
   | { type: 'toggle_clause_picker'; open: boolean };
+
+type DesktopWindowKey = 'library' | 'browser' | 'properties';
+
+type DesktopWindowState = {
+  x: number;
+  y: number;
+  z: number;
+  visible: boolean;
+};
+
+type DragState = {
+  key: DesktopWindowKey;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+};
 
 function reducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
@@ -74,6 +92,11 @@ function reorderById<T extends { id: string | number }>(items: T[], fromId: stri
 }
 
 const LIBRARY_TABS = ['project', 'clauses', 'assembly', 'materials', 'products'] as const;
+const DEFAULT_WINDOWS: Record<DesktopWindowKey, DesktopWindowState> = {
+  library: { x: 16, y: 16, z: 1, visible: true },
+  browser: { x: 336, y: 16, z: 2, visible: true },
+  properties: { x: 980, y: 16, z: 3, visible: true }
+};
 
 type LibraryTab = typeof LIBRARY_TABS[number];
 
@@ -82,8 +105,12 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   const { document, setDocument, loading, error, saveState, saveDocumentDebounced } = useDocument(documentId);
   const [state, dispatch] = useReducer(reducer, { selectedBlockId: '', clausePickerOpen: false });
   const [activeLibrary, setActiveLibrary] = useState<LibraryTab>('project');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [inspectorFloating, setInspectorFloating] = useState(false);
+  const [desktopWindows, setDesktopWindows] = useState<Record<DesktopWindowKey, DesktopWindowState>>(DEFAULT_WINDOWS);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [highestZ, setHighestZ] = useState(3);
+  const [openMenu, setOpenMenu] = useState<'file' | 'edit' | 'view' | 'help' | null>(null);
+  const [helpMessage, setHelpMessage] = useState('Tip: use View → Reset layout if windows overlap.');
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const clauseMap = useMemo(() => new Map((clauses || []).map((clause) => [String(clause.id), clause])), [clauses]);
   const sections = document?.structure?.sections || [];
@@ -94,6 +121,44 @@ export default function EditorPage({ clauses }: EditorPageProps) {
       dispatch({ type: 'initialize_selection', blockId: firstBlockId });
     }
   }, [document?.id]);
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const onPointerMove = (event: PointerEvent) => {
+      setDesktopWindows((prev) => ({
+        ...prev,
+        [dragState.key]: {
+          ...prev[dragState.key],
+          x: Math.max(0, dragState.originX + event.clientX - dragState.startX),
+          y: Math.max(0, dragState.originY + event.clientY - dragState.startY)
+        }
+      }));
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId === dragState.pointerId) {
+        setDragState(null);
+      }
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+  }, [dragState]);
+
+  useEffect(() => {
+    const closeMenus = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setOpenMenu(null);
+      }
+    };
+    window.addEventListener('mousedown', closeMenus);
+    return () => window.removeEventListener('mousedown', closeMenus);
+  }, []);
 
   const selectedBlock = useMemo(() => {
     for (const section of sections) {
@@ -145,6 +210,26 @@ export default function EditorPage({ clauses }: EditorPageProps) {
     saveDocumentDebounced();
   };
 
+  const bringToFront = (key: DesktopWindowKey) => {
+    setHighestZ((current) => {
+      const next = current + 1;
+      setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], z: next } }));
+      return next;
+    });
+  };
+
+  const setWindowVisibility = (key: DesktopWindowKey, visible: boolean) => {
+    setDesktopWindows((prev) => ({ ...prev, [key]: { ...prev[key], visible } }));
+    if (visible) {
+      bringToFront(key);
+    }
+  };
+
+  const resetLayout = () => {
+    setDesktopWindows(DEFAULT_WINDOWS);
+    setHighestZ(3);
+  };
+
   const handleTreeSelection = (node: TreeNodeItem) => {
     if (node.data?.type === 'block') {
       dispatch({ type: 'select_block', blockId: node.data.id });
@@ -193,24 +278,84 @@ export default function EditorPage({ clauses }: EditorPageProps) {
   return (
     <AppShell
       header={(
-        <header className="topbar panel">
-          <div>
-            <h1>{document.title}</h1>
-            <p>{saveState}</p>
+        <>
+          <header className="topbar panel">
+            <div>
+              <h1>{document.title}</h1>
+              <p>{saveState}</p>
+            </div>
+            <div className="row">
+              <Link to="/"><button className="ghost">Dashboard</button></Link>
+              <button onClick={() => saveDocumentDebounced({ immediate: true })}>Save now</button>
+            </div>
+          </header>
+
+          <div className="panel windows-menubar" ref={menuRef}>
+            <div className="menu-root">
+              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'file' ? null : 'file'))}>File</button>
+              {openMenu === 'file' ? (
+                <div className="menu-dropdown">
+                  <button type="button" className="ghost" onClick={() => { saveDocumentDebounced({ immediate: true }); setOpenMenu(null); }}>Save</button>
+                  <Link to="/"><button type="button" className="ghost">Exit to dashboard</button></Link>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="menu-root">
+              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'edit' ? null : 'edit'))}>Edit</button>
+              {openMenu === 'edit' ? (
+                <div className="menu-dropdown">
+                  <button type="button" className="ghost" onClick={() => { dispatch({ type: 'toggle_clause_picker', open: true }); setOpenMenu(null); }}>Change clause in selected block</button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="menu-root">
+              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'view' ? null : 'view'))}>View</button>
+              {openMenu === 'view' ? (
+                <div className="menu-dropdown">
+                  {(['library', 'browser', 'properties'] as DesktopWindowKey[]).map((key) => (
+                    <button key={key} type="button" className="ghost" onClick={() => setWindowVisibility(key, !desktopWindows[key].visible)}>
+                      {desktopWindows[key].visible ? 'Hide' : 'Show'} {key}
+                    </button>
+                  ))}
+                  <button type="button" className="ghost" onClick={() => { resetLayout(); setOpenMenu(null); }}>Reset layout</button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="menu-root">
+              <button type="button" className="ghost" onClick={() => setOpenMenu((value) => (value === 'help' ? null : 'help'))}>Help</button>
+              {openMenu === 'help' ? (
+                <div className="menu-dropdown">
+                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Drag windows by their title bars. Use View to hide/show tools.'); setOpenMenu(null); }}>Window controls</button>
+                  <button type="button" className="ghost" onClick={() => { setHelpMessage('Spec Writer desktop prototype inspired by classic Windows UI patterns.'); setOpenMenu(null); }}>About</button>
+                </div>
+              ) : null}
+            </div>
+
+            <p className="muted windows-help-copy">{helpMessage}</p>
           </div>
-          <div className="row">
-            <button className="ghost" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}</button>
-            <button className="ghost" onClick={() => setInspectorFloating((value) => !value)}>{inspectorFloating ? 'Dock editor panel' : 'Float editor panel'}</button>
-            <Link to="/"><button className="ghost">Dashboard</button></Link>
-            <button onClick={() => saveDocumentDebounced({ immediate: true })}>Save now</button>
-          </div>
-        </header>
+        </>
       )}
     >
-      <section className={`editor-layout-workbench ${sidebarOpen ? 'sidebar-open' : 'sidebar-hidden'}`}>
-        {sidebarOpen ? (
-          <aside className="panel workbench-sidebar">
-            <div className="window-titlebar">Library navigator</div>
+      <section className="windows-desktop">
+        {desktopWindows.library.visible ? (
+          <aside
+            className="panel app-window app-window-library"
+            style={{ left: desktopWindows.library.x, top: desktopWindows.library.y, zIndex: desktopWindows.library.z }}
+            onPointerDown={() => bringToFront('library')}
+          >
+            <div
+              className="window-titlebar draggable"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                bringToFront('library');
+                setDragState({ key: 'library', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.library.x, originY: desktopWindows.library.y });
+              }}
+            >
+              Library browser
+            </div>
             <div className="left-tabs">
               {LIBRARY_TABS.map((tab) => (
                 <button key={tab} type="button" className={activeLibrary === tab ? 'active ghost' : 'ghost'} onClick={() => setActiveLibrary(tab)}>
@@ -237,31 +382,67 @@ export default function EditorPage({ clauses }: EditorPageProps) {
           </aside>
         ) : null}
 
-        <Canvas
-          sections={sections}
-          clauseMap={clauseMap}
-          variableValues={document.variable_values || {}}
-          selectedBlockId={state.selectedBlockId}
-          onSelectBlock={(blockId) => dispatch({ type: 'select_block', blockId })}
-        />
+        {desktopWindows.browser.visible ? (
+          <section
+            className="panel app-window app-window-browser"
+            style={{ left: desktopWindows.browser.x, top: desktopWindows.browser.y, zIndex: desktopWindows.browser.z }}
+            onPointerDown={() => bringToFront('browser')}
+          >
+            <div
+              className="window-titlebar draggable"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                bringToFront('browser');
+                setDragState({ key: 'browser', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.browser.x, originY: desktopWindows.browser.y });
+              }}
+            >
+              Document browser
+            </div>
+            <Canvas
+              sections={sections}
+              clauseMap={clauseMap}
+              variableValues={document.variable_values || {}}
+              selectedBlockId={state.selectedBlockId}
+              onSelectBlock={(blockId) => dispatch({ type: 'select_block', blockId })}
+            />
+          </section>
+        ) : null}
 
-        <Inspector
-          className={inspectorFloating ? 'floating' : 'docked'}
-          document={document}
-          selectedBlock={selectedBlock}
-          clauseMap={clauseMap}
-          onSelectedBodyChange={(body) => {
-            updateSelectedBlock((block) => (
-              block.type === 'clause_ref'
-                ? { ...block, overrides: { ...(block.overrides || {}), body } }
-                : { ...block, body }
-            ));
-          }}
-          onSelectedLevelChange={(level) => {
-            updateSelectedBlock((block) => ({ ...block, level }));
-          }}
-          onOpenClausePicker={() => dispatch({ type: 'toggle_clause_picker', open: true })}
-        />
+        {desktopWindows.properties.visible ? (
+          <aside
+            className="panel app-window app-window-properties"
+            style={{ left: desktopWindows.properties.x, top: desktopWindows.properties.y, zIndex: desktopWindows.properties.z }}
+            onPointerDown={() => bringToFront('properties')}
+          >
+            <div
+              className="window-titlebar draggable"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                bringToFront('properties');
+                setDragState({ key: 'properties', pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: desktopWindows.properties.x, originY: desktopWindows.properties.y });
+              }}
+            >
+              Properties
+            </div>
+            <Inspector
+              className="window-inspector"
+              document={document}
+              selectedBlock={selectedBlock}
+              clauseMap={clauseMap}
+              onSelectedBodyChange={(body) => {
+                updateSelectedBlock((block) => (
+                  block.type === 'clause_ref'
+                    ? { ...block, overrides: { ...(block.overrides || {}), body } }
+                    : { ...block, body }
+                ));
+              }}
+              onSelectedLevelChange={(level) => {
+                updateSelectedBlock((block) => ({ ...block, level }));
+              }}
+              onOpenClausePicker={() => dispatch({ type: 'toggle_clause_picker', open: true })}
+            />
+          </aside>
+        ) : null}
       </section>
 
       <ClausePickerModal
